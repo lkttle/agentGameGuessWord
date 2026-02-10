@@ -1,8 +1,10 @@
-import { MatchStatus, RoomStatus } from '@prisma/client';
+import { MatchStatus, MetricEventType, RoomStatus } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { assertRoomTransition } from '@/lib/room/room-state';
+import { updateLeaderboardForFinishedRoom } from '@/lib/leaderboard/service';
+import { recordMetricEvent } from '@/lib/metrics/service';
 
 interface FinishRoomBody {
   winnerUserId?: string;
@@ -28,7 +30,11 @@ export async function POST(
     return NextResponse.json({ error: 'Only host can finish room' }, { status: 403 });
   }
 
-  assertRoomTransition(room.status, RoomStatus.FINISHED);
+  try {
+    assertRoomTransition(room.status, RoomStatus.FINISHED);
+  } catch {
+    return NextResponse.json({ error: 'Invalid room status transition' }, { status: 409 });
+  }
 
   const body = (await request.json()) as FinishRoomBody;
 
@@ -49,6 +55,17 @@ export async function POST(
     });
 
     return { updatedRoom, match };
+  });
+
+  await updateLeaderboardForFinishedRoom(room.id);
+  await recordMetricEvent(MetricEventType.MATCH_COMPLETE, {
+    userId: user.id,
+    roomId: room.id,
+    matchId: result.match.id,
+    payload: {
+      winnerUserId: body.winnerUserId ?? null,
+      totalRounds: result.match.totalRounds
+    }
   });
 
   return NextResponse.json({ room: result.updatedRoom, match: result.match });

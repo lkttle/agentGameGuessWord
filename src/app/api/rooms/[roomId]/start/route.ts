@@ -1,8 +1,9 @@
-import { MatchStatus, RoomStatus } from '@prisma/client';
+import { MatchStatus, MetricEventType, RoomStatus } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { assertRoomTransition } from '@/lib/room/room-state';
+import { recordMetricEvent } from '@/lib/metrics/service';
 
 export async function POST(
   _request: Request,
@@ -29,7 +30,11 @@ export async function POST(
     return NextResponse.json({ error: 'At least two participants required' }, { status: 400 });
   }
 
-  assertRoomTransition(room.status, RoomStatus.RUNNING);
+  try {
+    assertRoomTransition(room.status, RoomStatus.RUNNING);
+  } catch {
+    return NextResponse.json({ error: 'Invalid room status transition' }, { status: 409 });
+  }
 
   const result = await prisma.$transaction(async (tx) => {
     const updatedRoom = await tx.room.update({
@@ -46,6 +51,12 @@ export async function POST(
     });
 
     return { updatedRoom, match };
+  });
+
+  await recordMetricEvent(MetricEventType.MATCH_START, {
+    userId: user.id,
+    roomId: room.id,
+    matchId: result.match.id
   });
 
   return NextResponse.json({ room: result.updatedRoom, match: result.match });

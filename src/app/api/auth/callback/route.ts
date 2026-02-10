@@ -1,9 +1,11 @@
+import { MetricEventType } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { verifyAndConsumeOauthState } from '@/lib/auth/oauth-state';
 import { createSession } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
 import { env } from '@/lib/config/env';
 import { secondMeSdk } from '@/lib/secondme/sdk';
+import { recordMetricEvent } from '@/lib/metrics/service';
 
 function redirectTo(path: string): Response {
   return NextResponse.redirect(new URL(path, env.appBaseUrl));
@@ -56,6 +58,11 @@ export async function GET(request: Request): Promise<Response> {
     });
 
     await createSession(user.id, secondmeUserId);
+    await recordMetricEvent(MetricEventType.LOGIN_SUCCESS, {
+      userId: user.id,
+      payload: { secondmeUserId }
+    });
+
     return redirectTo('/');
   } catch (error) {
     console.error('OAuth callback failed', error);
