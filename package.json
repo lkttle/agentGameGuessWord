@@ -9,7 +9,9 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "seed:demo": "node scripts/seed-demo.mjs",
+    "smoke:demo": "bash scripts/demo-smoke-check.sh"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",
