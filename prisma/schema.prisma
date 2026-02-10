@@ -55,6 +55,7 @@ model User {
   participants   Participant[]
   scores         LeaderboardEntry[]
   metricEvents   MetricEvent[]
+  wonMatches     Match[]           @relation("MatchWinner")
 
   @@index([createdAt])
   @@map("users")
@@ -100,7 +101,7 @@ model Match {
   room           Room         @relation(fields: [roomId], references: [id])
   status         MatchStatus  @default(RUNNING)
   winnerUserId   String?      @map("winner_user_id")
-  winnerUser     User?        @relation(fields: [winnerUserId], references: [id])
+  winnerUser     User?        @relation("MatchWinner", fields: [winnerUserId], references: [id])
   totalRounds    Int          @default(0) @map("total_rounds")
   startedAt      DateTime     @default(now()) @map("started_at")
   endedAt        DateTime?    @map("ended_at")
