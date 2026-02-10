@@ -1,8 +1,22 @@
+import { RoomStatePollingPanel } from '@/components/RoomStatePollingPanel';
+
 export default function HomePage() {
   return (
     <main>
       <h1>A2A 首字母猜词游戏（MVP）</h1>
-      <p>当前阶段已完成基础项目骨架、数据模型与 OAuth 认证接口准备。</p>
+      <p>已接入 SecondMe OAuth 与房间/对局基础接口。</p>
+      <ul>
+        <li>
+          登录：<code>/api/auth/login</code>
+        </li>
+        <li>
+          会话：<code>/api/auth/session</code>
+        </li>
+        <li>
+          创建房间：<code>POST /api/rooms</code>
+        </li>
+      </ul>
+      <RoomStatePollingPanel />
     </main>
   );
 }
