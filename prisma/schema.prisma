@@ -1,0 +1,165 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GameMode {
+  AGENT_VS_AGENT
+  HUMAN_VS_AGENT
+}
+
+enum RoomStatus {
+  WAITING
+  RUNNING
+  FINISHED
+}
+
+enum MatchStatus {
+  RUNNING
+  FINISHED
+}
+
+enum ParticipantType {
+  HUMAN
+  AGENT
+}
+
+enum LeaderboardPeriod {
+  DAILY
+  ALL_TIME
+}
+
+enum MetricEventType {
+  LOGIN_SUCCESS
+  MATCH_START
+  MATCH_COMPLETE
+}
+
+model User {
+  id             String      @id @default(cuid())
+  secondmeUserId String?     @unique @map("secondme_user_id")
+  email          String?     @map("email")
+  name           String?     @map("name")
+  avatarUrl      String?     @map("avatar_url")
+  route          String?     @map("route")
+  accessToken    String?     @map("access_token")
+  refreshToken   String?     @map("refresh_token")
+  tokenExpiresAt DateTime?   @map("token_expires_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  hostedRooms    Room[]      @relation("RoomHost")
+  participants   Participant[]
+  scores         LeaderboardEntry[]
+  metricEvents   MetricEvent[]
+
+  @@index([createdAt])
+  @@map("users")
+}
+
+model Room {
+  id           String        @id @default(cuid())
+  mode         GameMode
+  status       RoomStatus    @default(WAITING)
+  hostUserId   String        @map("host_user_id")
+  hostUser     User          @relation("RoomHost", fields: [hostUserId], references: [id])
+  participants Participant[]
+  match        Match?
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([hostUserId])
+  @@map("rooms")
+}
+
+model Participant {
+  id              String          @id @default(cuid())
+  roomId          String          @map("room_id")
+  room            Room            @relation(fields: [roomId], references: [id])
+  userId          String?         @map("user_id")
+  user            User?           @relation(fields: [userId], references: [id])
+  participantType ParticipantType @map("participant_type")
+  displayName     String          @map("display_name")
+  seatOrder       Int             @map("seat_order")
+  isReady         Boolean         @default(false) @map("is_ready")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@unique([roomId, seatOrder])
+  @@index([roomId])
+  @@index([userId])
+  @@map("participants")
+}
+
+model Match {
+  id            String       @id @default(cuid())
+  roomId         String       @unique @map("room_id")
+  room           Room         @relation(fields: [roomId], references: [id])
+  status         MatchStatus  @default(RUNNING)
+  winnerUserId   String?      @map("winner_user_id")
+  winnerUser     User?        @relation(fields: [winnerUserId], references: [id])
+  totalRounds    Int          @default(0) @map("total_rounds")
+  startedAt      DateTime     @default(now()) @map("started_at")
+  endedAt        DateTime?    @map("ended_at")
+  roundLogs      RoundLog[]
+
+  @@index([status])
+  @@index([winnerUserId])
+  @@map("matches")
+}
+
+model RoundLog {
+  id               String          @id @default(cuid())
+  matchId           String          @map("match_id")
+  match             Match           @relation(fields: [matchId], references: [id])
+  roundIndex        Int             @map("round_index")
+  actorType         ParticipantType @map("actor_type")
+  actorId           String          @map("actor_id")
+  guessWord         String?         @map("guess_word")
+  isCorrect         Boolean         @default(false) @map("is_correct")
+  scoreDelta        Int             @default(0) @map("score_delta")
+  timedOut          Boolean         @default(false) @map("timed_out")
+  elapsedMs         Int?            @map("elapsed_ms")
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  @@index([matchId, roundIndex])
+  @@index([actorId])
+  @@map("round_logs")
+}
+
+model LeaderboardEntry {
+  id         String            @id @default(cuid())
+  userId     String            @map("user_id")
+  user       User              @relation(fields: [userId], references: [id])
+  period     LeaderboardPeriod
+  dateKey    String?           @map("date_key")
+  score      Int               @default(0)
+  wins       Int               @default(0)
+  losses     Int               @default(0)
+  updatedAt  DateTime          @updatedAt @map("updated_at")
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  @@unique([userId, period, dateKey])
+  @@index([period, score])
+  @@map("leaderboard_entries")
+}
+
+model MetricEvent {
+  id          String          @id @default(cuid())
+  eventType   MetricEventType @map("event_type")
+  userId      String?         @map("user_id")
+  user        User?           @relation(fields: [userId], references: [id])
+  roomId      String?         @map("room_id")
+  matchId     String?         @map("match_id")
+  payloadJson Json?           @map("payload_json")
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  @@index([eventType, createdAt])
+  @@index([userId])
+  @@index([roomId])
+  @@index([matchId])
+  @@map("metric_events")
+}

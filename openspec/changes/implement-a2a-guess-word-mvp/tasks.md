@@ -1,8 +1,8 @@
 ## 1. 基础搭建与数据模型
 
-- [ ] 1.1 配置运行环境变量（SecondMe OAuth、数据库、应用 URL）并提供 `.env.example`。
-- [ ] 1.2 创建核心数据表与索引（User、Room、Match、RoundLog、LeaderboardEntry、MetricEvent）。
-- [ ] 1.3 定义共享领域类型与状态常量（room status、match status、mode、score fields）。
+- [x] 1.1 配置运行环境变量（SecondMe OAuth、数据库、应用 URL）并提供 `.env.example`。
+- [x] 1.2 创建核心数据表与索引（User、Room、Match、RoundLog、LeaderboardEntry、MetricEvent）。
+- [x] 1.3 定义共享领域类型与状态常量（room status、match status、mode、score fields）。
 
 ## 2. OAuth 与会话安全
 
