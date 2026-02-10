@@ -24,6 +24,8 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const displayName = body.displayName?.trim() || user.name || 'Host';
+  const hostParticipantType =
+    body.mode === GameMode.AGENT_VS_AGENT ? ParticipantType.AGENT : ParticipantType.HUMAN;
 
   const room = await prisma.room.create({
     data: {
@@ -32,7 +34,7 @@ export async function POST(request: Request): Promise<Response> {
       hostUserId: user.id,
       participants: {
         create: {
-          participantType: ParticipantType.HUMAN,
+          participantType: hostParticipantType,
           userId: user.id,
           displayName,
           seatOrder: 1,
