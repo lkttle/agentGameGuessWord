@@ -1,17 +1,14 @@
-const requiredEnvKeys = [
-  'SECONDME_CLIENT_ID',
-  'SECONDME_CLIENT_SECRET',
-  'SECONDME_OAUTH_REDIRECT_URI',
-  'SECONDME_OAUTH_URL',
-  'SECONDME_API_BASE_URL',
-  'SECONDME_TOKEN_CODE_ENDPOINT',
-  'SECONDME_TOKEN_REFRESH_ENDPOINT',
-  'APP_BASE_URL',
-  'DATABASE_URL',
-  'SESSION_SECRET'
-] as const;
-
-type RequiredEnvKey = (typeof requiredEnvKeys)[number];
+type RequiredEnvKey =
+  | 'SECONDME_CLIENT_ID'
+  | 'SECONDME_CLIENT_SECRET'
+  | 'SECONDME_OAUTH_REDIRECT_URI'
+  | 'SECONDME_OAUTH_URL'
+  | 'SECONDME_API_BASE_URL'
+  | 'SECONDME_TOKEN_CODE_ENDPOINT'
+  | 'SECONDME_TOKEN_REFRESH_ENDPOINT'
+  | 'APP_BASE_URL'
+  | 'DATABASE_URL'
+  | 'SESSION_SECRET';
 
 function readEnv(key: RequiredEnvKey): string {
   const value = process.env[key];

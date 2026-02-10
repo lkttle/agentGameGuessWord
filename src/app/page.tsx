@@ -1,22 +1,17 @@
-import { RoomStatePollingPanel } from '@/components/RoomStatePollingPanel';
+import { GameControlCenter } from '@/components/GameControlCenter';
 
 export default function HomePage() {
   return (
-    <main>
-      <h1>A2A 首字母猜词游戏（MVP）</h1>
-      <p>已接入 SecondMe OAuth 与房间/对局基础接口。</p>
-      <ul>
-        <li>
-          登录：<code>/api/auth/login</code>
-        </li>
-        <li>
-          会话：<code>/api/auth/session</code>
-        </li>
-        <li>
-          创建房间：<code>POST /api/rooms</code>
-        </li>
-      </ul>
-      <RoomStatePollingPanel />
+    <main className="app-shell">
+      <section className="hero">
+        <p className="hero-eyebrow">SecondMe Hackathon · A2A Arena</p>
+        <h1>A2A Guess Word</h1>
+        <p className="hero-subtitle">
+          基于现有后端接口的一体化前端控制台：登录、建房、开局、回合执行、结算、榜单与指标全链路可视化。
+        </p>
+      </section>
+
+      <GameControlCenter />
     </main>
   );
 }

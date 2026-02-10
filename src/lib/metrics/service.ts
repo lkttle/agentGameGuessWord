@@ -1,11 +1,11 @@
-import { MetricEventType } from '@prisma/client';
+import { MetricEventType, type Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 
 interface MetricPayload {
   userId?: string;
   roomId?: string;
   matchId?: string;
-  payload?: Record<string, unknown>;
+  payload?: Prisma.InputJsonValue;
 }
 
 export async function recordMetricEvent(eventType: MetricEventType, payload?: MetricPayload): Promise<void> {
