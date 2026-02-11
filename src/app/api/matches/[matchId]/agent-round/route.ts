@@ -4,13 +4,14 @@ import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import {
   buildInitialLetterHint,
-  evaluateRound,
+  evaluateAgentGuess,
   timeoutRoundResult
 } from '@/lib/game/guess-word-engine';
 import {
   FallbackAgentTurnClient,
   runAgentTurnsWithRetry
 } from '@/lib/agent/orchestrator';
+import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
 
 interface AgentRoundBody {
   targetWord?: string;
@@ -61,13 +62,20 @@ export async function POST(
 
   const roundIndex = body.roundIndex ?? match.totalRounds + 1;
   const hint = buildInitialLetterHint(targetWord);
-  const client = new FallbackAgentTurnClient();
+
+  // Try SecondMe agent client first, fall back to dummy client
+  let client;
+  try {
+    client = new SecondMeAgentTurnClient();
+  } catch {
+    client = new FallbackAgentTurnClient();
+  }
 
   const rawTurns = await runAgentTurnsWithRetry(
     agents.map((agent) => agent.id),
     { roundIndex, hint, previousGuesses: [] },
     client,
-    { timeoutMs: 3000, maxRetries: 2 }
+    { timeoutMs: 15000, maxRetries: 1 }
   );
 
   const turns: Array<{
@@ -86,9 +94,10 @@ export async function POST(
     const turn = rawTurns[index];
     const result = turn.usedFallback
       ? timeoutRoundResult(targetWord)
-      : evaluateRound({
+      : evaluateAgentGuess({
           targetWord,
-          guessWord: turn.guessWord,
+          rawResponse: turn.guessWord,
+          extractedWord: turn.guessWord,
           attemptIndex: index + 1
         });
 

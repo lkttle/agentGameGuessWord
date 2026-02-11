@@ -1,7 +1,7 @@
 import { ParticipantType, type User } from '@prisma/client';
 import { AGENT_SOURCES, type AgentSource } from '@/lib/domain/types';
 
-export const MAX_PARTICIPANTS = 4;
+export const MAX_PARTICIPANTS = 5;
 
 export interface ParticipantConfigInput {
   type: ParticipantType;

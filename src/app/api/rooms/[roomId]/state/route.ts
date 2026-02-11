@@ -16,7 +16,13 @@ export async function GET(
   const room = await prisma.room.findUnique({
     where: { id: roomId },
     include: {
-      participants: true,
+      participants: {
+        include: {
+          user: {
+            select: { avatarUrl: true, selfIntroduction: true }
+          }
+        }
+      },
       match: {
         include: {
           roundLogs: {

@@ -1,5 +1,6 @@
 import { LeaderboardPeriod } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { calculateLeaderboardBonus } from '@/lib/game/guess-word-engine';
 
 function buildDateKey(date = new Date()): string {
   const year = date.getUTCFullYear();
@@ -31,22 +32,31 @@ export async function updateLeaderboardForFinishedRoom(roomId: string): Promise<
       .map((participant) => [participant.id, participant.userId as string])
   );
 
-  const scoreMap = new Map<string, number>();
+  // Calculate per-participant scores from round logs
+  const participantScoreMap = new Map<string, number>();
   for (const log of match.roundLogs) {
-    const userId = participantToUser.get(log.actorId);
-    if (!userId) {
-      continue;
-    }
-    const current = scoreMap.get(userId) ?? 0;
-    scoreMap.set(userId, current + log.scoreDelta);
+    const current = participantScoreMap.get(log.actorId) ?? 0;
+    participantScoreMap.set(log.actorId, current + log.scoreDelta);
   }
 
-  const winnerUserId = match.winnerUserId;
+  // Rank participants by score descending
+  const rankedParticipants = [...participantScoreMap.entries()]
+    .sort((a, b) => b[1] - a[1]);
+
+  const playerCount = match.room.participants.length;
   const dateKey = buildDateKey();
 
   await prisma.$transaction(async (tx) => {
-    for (const [userId, score] of scoreMap.entries()) {
-      const isWinner = winnerUserId === userId;
+    for (let i = 0; i < rankedParticipants.length; i++) {
+      const [participantId] = rankedParticipants[i];
+      const userId = participantToUser.get(participantId);
+      if (!userId) {
+        continue;
+      }
+
+      const ranking = i + 1;
+      const bonus = calculateLeaderboardBonus(playerCount, ranking);
+      const isWinner = ranking === 1;
       const wins = isWinner ? 1 : 0;
       const losses = isWinner ? 0 : 1;
 
@@ -59,7 +69,7 @@ export async function updateLeaderboardForFinishedRoom(roomId: string): Promise<
           }
         },
         update: {
-          score: { increment: score },
+          score: { increment: bonus },
           wins: { increment: wins },
           losses: { increment: losses }
         },
@@ -67,7 +77,7 @@ export async function updateLeaderboardForFinishedRoom(roomId: string): Promise<
           userId,
           period: LeaderboardPeriod.ALL_TIME,
           dateKey: 'ALL_TIME',
-          score,
+          score: bonus,
           wins,
           losses
         }
@@ -82,7 +92,7 @@ export async function updateLeaderboardForFinishedRoom(roomId: string): Promise<
           }
         },
         update: {
-          score: { increment: score },
+          score: { increment: bonus },
           wins: { increment: wins },
           losses: { increment: losses }
         },
@@ -90,7 +100,7 @@ export async function updateLeaderboardForFinishedRoom(roomId: string): Promise<
           userId,
           period: LeaderboardPeriod.DAILY,
           dateKey,
-          score,
+          score: bonus,
           wins,
           losses
         }

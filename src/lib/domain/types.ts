@@ -5,15 +5,6 @@ export const GAME_MODES = {
 
 export type GameMode = (typeof GAME_MODES)[keyof typeof GAME_MODES];
 
-export const PLAY_ENTRY_MODES = {
-  PLAYER_VS_PLATFORM_AGENT: 'PLAYER_VS_PLATFORM_AGENT',
-  PLAYER_VS_SELF_AGENT: 'PLAYER_VS_SELF_AGENT',
-  FAST_AGENT_ARENA: 'FAST_AGENT_ARENA',
-  MULTI_AGENT_BATTLE: 'MULTI_AGENT_BATTLE'
-} as const;
-
-export type PlayEntryMode = (typeof PLAY_ENTRY_MODES)[keyof typeof PLAY_ENTRY_MODES];
-
 export const ROOM_STATUSES = {
   WAITING: 'WAITING',
   RUNNING: 'RUNNING',

@@ -1,141 +1,218 @@
-import Link from 'next/link';
-import { HomePrimaryActionButton, HomeRecentUsersTicker } from '@/components/HomeHeroWidgets';
+'use client';
 
-function AgentIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="11" width="18" height="10" rx="2" />
-      <circle cx="12" cy="5" r="4" />
-      <path d="M8 15h.01M16 15h.01" />
-      <path d="M9 18h6" />
-    </svg>
-  );
+import { useRouter } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import Link from 'next/link';
+import { GAME_MODES, type GameMode } from '@/lib/domain/types';
+import { HomeRecentUsersTicker } from '@/components/HomeHeroWidgets';
+
+interface SessionResponse {
+  authenticated: boolean;
 }
 
-function SwordsIcon() {
+interface CreateRoomResponse {
+  room: { id: string };
+}
+
+async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    cache: 'no-store'
+  });
+  const text = await res.text();
+  let data: unknown = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = { error: text }; }
+  }
+  if (!res.ok) {
+    const msg = data && typeof data === 'object' && 'error' in data
+      ? String((data as { error: unknown }).error) : `${res.status} ${res.statusText}`;
+    throw new Error(msg);
+  }
+  return data as T;
+}
+
+interface ModeOption {
+  key: string;
+  title: string;
+  subtitle: string;
+  icon: string;
+  mode: GameMode;
+  autoJoinSelfAgent: boolean;
+}
+
+const modeOptions: ModeOption[] = [
+  {
+    key: 'PLAYER_VS_AGENT',
+    title: '玩家 VS Agent',
+    subtitle: '亲自上场，和 AI Agent 比拼猜词',
+    icon: '🎮',
+    mode: GAME_MODES.HUMAN_VS_AGENT,
+    autoJoinSelfAgent: false
+  },
+  {
+    key: 'SELF_AGENT_VS_AGENTS',
+    title: '我的Agent VS 其他Agent',
+    subtitle: '派你的 SecondMe Agent 出战，观战助威',
+    icon: '🤖',
+    mode: GAME_MODES.AGENT_VS_AGENT,
+    autoJoinSelfAgent: true
+  }
+];
+
+function HomeContent() {
+  const router = useRouter();
+  const [selectedMode, setSelectedMode] = useState<string>('PLAYER_VS_AGENT');
+  const [playerCount, setPlayerCount] = useState(4);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+
+  const modeConfig = modeOptions.find(o => o.key === selectedMode) ?? modeOptions[0];
+
+  async function ensureSession(): Promise<SessionResponse | null> {
+    const session = await apiJson<SessionResponse>('/api/auth/session').catch(
+      () => ({ authenticated: false })
+    );
+    if (session.authenticated) return session;
+    window.location.href = `/api/auth/login?return_to=${encodeURIComponent('/')}`;
+    return null;
+  }
+
+  async function handleStartGame() {
+    try {
+      setError('');
+      setBusy('正在为你极速开局...');
+      const session = await ensureSession();
+      if (!session) return;
+
+      const payload = {
+        mode: modeConfig.mode,
+        autoJoinSelfAgent: modeConfig.autoJoinSelfAgent,
+        participantCount: Math.max(2, Math.min(5, playerCount))
+      };
+
+      let createRes: CreateRoomResponse;
+      try {
+        createRes = await apiJson<CreateRoomResponse>('/api/rooms', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      } catch (createError) {
+        if (!modeConfig.autoJoinSelfAgent) throw createError;
+        createRes = await apiJson<CreateRoomResponse>('/api/rooms', {
+          method: 'POST',
+          body: JSON.stringify({ mode: modeConfig.mode })
+        });
+      }
+
+      await apiJson(`/api/rooms/${createRes.room.id}/start`, { method: 'POST', body: '{}' });
+      router.push(`/room/${createRes.room.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '开局失败，请稍后重试');
+    } finally {
+      setBusy('');
+    }
+  }
+
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14.5 17.5L3 6V3h3l11.5 11.5" />
-      <path d="M13 19l6-6" />
-      <path d="M16 16l4 4" />
-      <path d="M19 21l2-2" />
-      <path d="M9.5 6.5L21 18v3h-3L6.5 9.5" />
-      <path d="M11 5l-6 6" />
-      <path d="M8 8L4 4" />
-      <path d="M5 3L3 5" />
-    </svg>
+    <main>
+      {/* Hero */}
+      <section className="hero">
+        <div className="hero__inner">
+          <div className="hero__badge">SecondMe Hackathon &middot; A2A 猜词王</div>
+          <h1 className="hero__title">
+            <span className="hero__title-accent">A2A 猜词王</span><br />
+            拼音首字母对战
+          </h1>
+          <p className="hero__subtitle">
+            根据拼音首字母猜中文词语，和 AI Agent 同场竞技，冲击排行榜！
+          </p>
+        </div>
+        {/* Recent Users Ticker */}
+        <HomeRecentUsersTicker />
+      </section>
+
+      {/* Game Entry */}
+      <section className="section">
+        <div className="page-container">
+          <div className="section__header">
+            <h2 className="section__title">选择对战模式</h2>
+            <p className="section__desc">选一种玩法，立刻开始</p>
+          </div>
+
+          {error && <div className="alert alert--error mb-md">{error}</div>}
+          {busy && (
+            <div className="alert alert--info mb-md" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="loading-spinner" />
+              {busy}
+            </div>
+          )}
+
+          <div className="mode-grid">
+            {modeOptions.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={`mode-card ${selectedMode === option.key ? 'mode-card--selected' : ''}`}
+                onClick={() => setSelectedMode(option.key)}
+              >
+                <div className="mode-card__icon">
+                  <span style={{ fontSize: '2rem' }}>{option.icon}</span>
+                </div>
+                <h3 className="mode-card__title">{option.title}</h3>
+                <p className="mode-card__desc">{option.subtitle}</p>
+              </button>
+            ))}
+          </div>
+
+          {/* Quick Start Panel */}
+          <div className="quick-start-panel animate-slide-up">
+            <div className="quick-start-panel__row">
+              <div className="quick-start-panel__label">游戏人数</div>
+              <div className="quick-start-panel__counts">
+                {[2, 3, 4, 5].map(n => (
+                  <button
+                    key={n}
+                    type="button"
+                    className={`count-chip ${playerCount === n ? 'count-chip--active' : ''}`}
+                    onClick={() => setPlayerCount(n)}
+                  >
+                    {n}人
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="btn btn--gradient btn--lg btn--full"
+              onClick={() => void handleStartGame()}
+              disabled={!!busy}
+            >
+              {busy ? '开战中...' : '立即开战'}
+            </button>
+
+            <p className="quick-start-panel__hint">
+              玩法：看拼音首字母（如 CF），猜中文词语（如「吃饭」）。答对 +1 分，答错不扣分。
+            </p>
+          </div>
+
+          <div style={{ textAlign: 'center', marginTop: 'var(--space-lg)' }}>
+            <Link href="/leaderboard" className="btn btn--secondary">
+              查看排行榜
+            </Link>
+          </div>
+        </div>
+      </section>
+    </main>
   );
 }
 
 export default function HomePage() {
   return (
-    <main>
-      {/* Hero Section */}
-      <section className="hero">
-        <div className="hero__inner">
-          <div className="hero__badge">
-            SecondMe Hackathon &middot; A2A 猜词王
-          </div>
-          <h1 className="hero__title">
-            <span className="hero__title-accent">A2A 猜词王</span><br />
-            AI Agent 首字母对战
-          </h1>
-          <p className="hero__subtitle">
-            这是一款基于 SecondMe 的 A2A 猜词竞技游戏。
-            通过 SecondMe OAuth2 登录后，你可以直接带上自己的 Agent 开战，挑战 AI，并冲击排行榜。
-          </p>
-          <div className="hero__actions">
-            <HomePrimaryActionButton />
-            <Link href="/leaderboard" className="btn btn--secondary btn--lg hero__leaderboard-btn">
-              查看排行榜
-            </Link>
-          </div>
-          <HomeRecentUsersTicker />
-          <div className="hero__stats">
-            <div className="hero__stat">
-              <span className="hero__stat-value">2</span>
-              <span className="hero__stat-label">对战模式</span>
-            </div>
-            <div className="hero__stat">
-              <span className="hero__stat-value">OAuth2</span>
-              <span className="hero__stat-label">SecondMe 身份体系</span>
-            </div>
-            <div className="hero__stat">
-              <span className="hero__stat-value">A2A</span>
-              <span className="hero__stat-label">实时博弈</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Game Modes Section */}
-      <section className="section">
-        <div className="page-container">
-          <div className="section__header">
-            <h2 className="section__title">选择你的对战模式</h2>
-            <p className="section__desc">
-              两种玩法均基于 SecondMe 登录身份，支持统一积分与榜单统计
-            </p>
-          </div>
-
-          <div className="mode-grid">
-            <Link href="/play?mode=AGENT_VS_AGENT" className="mode-card">
-              <div className="mode-card__icon">
-                <AgentIcon />
-              </div>
-              <h3 className="mode-card__title">Agent vs Agent（核心）</h3>
-              <p className="mode-card__desc">
-                你与多个 Agent 同场对战，比拼推理能力，直观展示 A2A 场景价值。
-              </p>
-            </Link>
-            <Link href="/play?mode=HUMAN_VS_AGENT" className="mode-card">
-              <div className="mode-card__icon">
-                <SwordsIcon />
-              </div>
-              <h3 className="mode-card__title">Human vs Agent（挑战）</h3>
-              <p className="mode-card__desc">
-                亲自上场挑战 AI Agent，用你的词汇储备和推理直觉争取更高积分。
-              </p>
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* How to Play Section */}
-      <section className="section" style={{ background: 'var(--purple-50)' }}>
-        <div className="page-container">
-          <div className="section__header">
-            <h2 className="section__title">三步开战</h2>
-            <p className="section__desc">
-              简单三步，开始你的猜词之旅
-            </p>
-          </div>
-
-          <div className="steps-grid">
-            <div className="step-card">
-              <div className="step-card__number">1</div>
-              <h3 className="step-card__title">SecondMe 登录</h3>
-              <p className="step-card__desc">
-                使用 SecondMe OAuth2 完成身份授权，统一用户统计与积分归属。
-              </p>
-            </div>
-            <div className="step-card">
-              <div className="step-card__number">2</div>
-              <h3 className="step-card__title">创建或加入房间</h3>
-              <p className="step-card__desc">
-                选择模式后一键开战，无需手动输入房间 ID 或显示名称。
-              </p>
-            </div>
-            <div className="step-card">
-              <div className="step-card__number">3</div>
-              <h3 className="step-card__title">结算并冲榜</h3>
-              <p className="step-card__desc">
-                查看战报、分享成绩、登上排行榜，持续提升你的 A2A 对战排名。
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-    </main>
+    <Suspense fallback={<div className="page-container text-center"><span className="loading-spinner" /></div>}>
+      <HomeContent />
+    </Suspense>
   );
 }

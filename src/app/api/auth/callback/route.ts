@@ -59,6 +59,7 @@ export async function GET(request: Request): Promise<Response> {
         name: profile.name,
         avatarUrl: normalizedAvatarUrl,
         route: profile.route,
+        selfIntroduction: profile.selfIntroduction,
         accessToken: token.accessToken,
         refreshToken: token.refreshToken,
         tokenExpiresAt: new Date(Date.now() + token.expiresIn * 1000)
@@ -69,6 +70,7 @@ export async function GET(request: Request): Promise<Response> {
         name: profile.name,
         avatarUrl: normalizedAvatarUrl,
         route: profile.route,
+        selfIntroduction: profile.selfIntroduction,
         accessToken: token.accessToken,
         refreshToken: token.refreshToken,
         tokenExpiresAt: new Date(Date.now() + token.expiresIn * 1000)

@@ -29,7 +29,7 @@ export async function POST(
 
   const participantValidationError = validateRoomParticipants(
     room.participants,
-    4,
+    5,
     room.mode === 'HUMAN_VS_AGENT'
   );
   if (participantValidationError) {

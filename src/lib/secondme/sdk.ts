@@ -21,6 +21,7 @@ export interface SecondMeUserInfo {
   email?: string;
   avatarUrl?: string;
   route?: string;
+  selfIntroduction?: string;
 }
 
 function pickFirstString(
@@ -169,6 +170,7 @@ export class SecondMeSdk {
     const email = pickFirstString(data, ['email']);
     const avatarRaw = pickFirstString(data, ['avatarUrl', 'avatar_url', 'avatar', 'picture', 'headImg', 'head_img']);
     const route = pickFirstString(data, ['route']);
+    const selfIntroduction = pickFirstString(data, ['selfIntroduction', 'self_introduction', 'bio']);
 
     return {
       id,
@@ -176,7 +178,113 @@ export class SecondMeSdk {
       name,
       email,
       avatarUrl: normalizeAvatarUrl(avatarRaw),
-      route
+      route,
+      selfIntroduction
+    };
+  }
+
+  async chatStream(
+    accessToken: string,
+    options: {
+      message: string;
+      sessionId?: string;
+      systemPrompt?: string;
+    }
+  ): Promise<{ sessionId: string; content: string }> {
+    const body: Record<string, string> = { message: options.message };
+    if (options.sessionId) body.sessionId = options.sessionId;
+    if (options.systemPrompt) body.systemPrompt = options.systemPrompt;
+
+    const response = await fetch(`${env.secondmeApiBaseUrl}/api/secondme/chat/stream`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream'
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      throw new Error(`SecondMe chat/stream failed: HTTP ${response.status}`);
+    }
+
+    let sessionId = options.sessionId ?? '';
+    let content = '';
+
+    const text = await response.text();
+    const lines = text.split('\n');
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      if (trimmed.startsWith('event: session')) {
+        const nextIdx = lines.indexOf(line) + 1;
+        if (nextIdx < lines.length) {
+          const dataLine = lines[nextIdx].trim();
+          if (dataLine.startsWith('data: ')) {
+            try {
+              const parsed = JSON.parse(dataLine.slice(6));
+              if (parsed.sessionId) sessionId = parsed.sessionId;
+            } catch { /* ignore parse errors */ }
+          }
+        }
+        continue;
+      }
+
+      if (trimmed.startsWith('data: ')) {
+        const dataStr = trimmed.slice(6);
+        if (dataStr === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(dataStr);
+          const delta = parsed?.choices?.[0]?.delta?.content;
+          if (typeof delta === 'string') {
+            content += delta;
+          }
+        } catch { /* ignore parse errors */ }
+      }
+    }
+
+    return { sessionId, content };
+  }
+
+  async generateTTS(
+    accessToken: string,
+    options: {
+      text: string;
+      emotion?: string;
+    }
+  ): Promise<{ url: string; durationMs: number; sampleRate?: number; format?: string }> {
+    const response = await fetch(`${env.secondmeApiBaseUrl}/api/secondme/tts/generate`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({
+        text: options.text,
+        emotion: options.emotion ?? 'happy'
+      }),
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      throw new Error(`SecondMe TTS generate failed: HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as SecondMeEnvelope<Record<string, unknown>>;
+    if (payload.code !== 0) {
+      throw new Error(`SecondMe TTS rejected: code=${payload.code}`);
+    }
+
+    return {
+      url: String(payload.data.url ?? ''),
+      durationMs: Number(payload.data.durationMs ?? payload.data.duration_ms ?? 0),
+      sampleRate: payload.data.sampleRate ? Number(payload.data.sampleRate) : undefined,
+      format: payload.data.format ? String(payload.data.format) : undefined
     };
   }
 }

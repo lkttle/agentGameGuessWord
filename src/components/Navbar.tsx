@@ -22,7 +22,6 @@ export function Navbar() {
 
   const links = [
     { href: '/', label: '首页' },
-    { href: '/play', label: '快速开战' },
     { href: '/leaderboard', label: '排行榜' }
   ];
 

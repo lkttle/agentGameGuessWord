@@ -46,6 +46,7 @@ model User {
   name           String?     @map("name")
   avatarUrl      String?     @map("avatar_url")
   route          String?     @map("route")
+  selfIntroduction String?   @map("self_introduction")
   accessToken    String?     @map("access_token")
   refreshToken   String?     @map("refresh_token")
   tokenExpiresAt DateTime?   @map("token_expires_at")
@@ -56,9 +57,24 @@ model User {
   scores         LeaderboardEntry[]
   metricEvents   MetricEvent[]
   wonMatches     Match[]           @relation("MatchWinner")
+  chatSessions   ChatSession[]
 
   @@index([createdAt])
   @@map("users")
+}
+
+model ChatSession {
+  id                String   @id @default(cuid())
+  userId            String   @map("user_id")
+  user              User     @relation(fields: [userId], references: [id])
+  secondmeSessionId String   @map("secondme_session_id")
+  purpose           String   @default("game")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, purpose])
+  @@index([userId])
+  @@map("chat_sessions")
 }
 
 model Room {

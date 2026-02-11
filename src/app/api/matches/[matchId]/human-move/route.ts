@@ -2,11 +2,12 @@ import { MatchStatus, ParticipantType } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
-import { evaluateRound } from '@/lib/game/guess-word-engine';
+import { evaluateRound, evaluateAgentGuess } from '@/lib/game/guess-word-engine';
 import {
   FallbackAgentTurnClient,
   runAgentTurnWithRetry
 } from '@/lib/agent/orchestrator';
+import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
 
 interface HumanMoveBody {
   participantId?: string;
@@ -93,7 +94,13 @@ export async function POST(
       ? agentParticipants.filter((participant) => participant.id === body.agentParticipantId)
       : agentParticipants;
 
-    const client = new FallbackAgentTurnClient();
+    // Try SecondMe agent client first, fall back to dummy client
+    let client;
+    try {
+      client = new SecondMeAgentTurnClient();
+    } catch {
+      client = new FallbackAgentTurnClient();
+    }
     const previousGuesses = [guessWord];
 
     for (let index = 0; index < selectedAgent.length; index += 1) {
@@ -106,12 +113,13 @@ export async function POST(
           previousGuesses: [...previousGuesses]
         },
         client,
-        { timeoutMs: 3000, maxRetries: 2 }
+        { timeoutMs: 15000, maxRetries: 1 }
       );
 
-      const result = evaluateRound({
+      const result = evaluateAgentGuess({
         targetWord,
-        guessWord: turn.guessWord,
+        rawResponse: turn.guessWord,
+        extractedWord: turn.guessWord,
         attemptIndex: index + 2
       });
 

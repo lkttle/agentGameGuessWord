@@ -157,9 +157,9 @@ export default async function MatchResultPage({ params }: MatchResultPageProps) 
 
         {/* Actions */}
         <div className="results-actions animate-slide-up" style={{ animationDelay: '0.3s' }}>
-          <Link href="/play" className="btn btn--primary btn--lg">Play Again</Link>
-          <Link href="/leaderboard" className="btn btn--secondary btn--lg">Leaderboard</Link>
-          <Link href="/" className="btn btn--ghost btn--lg">Home</Link>
+          <Link href="/" className="btn btn--primary btn--lg">再来一局</Link>
+          <Link href="/leaderboard" className="btn btn--secondary btn--lg">排行榜</Link>
+          <Link href="/" className="btn btn--ghost btn--lg">首页</Link>
         </div>
       </div>
     </main>

@@ -1,12 +1,7 @@
 'use client';
 
-import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-
-interface SessionResponse {
-  authenticated: boolean;
-}
 
 interface RecentUser {
   id: string;
@@ -93,61 +88,6 @@ function CommunityAvatar({ user, displayName }: { user: RecentUser; displayName:
   );
 }
 
-export function HomePrimaryActionButton() {
-  const [authenticated, setAuthenticated] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let active = true;
-
-    async function loadSession() {
-      try {
-        const res = await fetch('/api/auth/session', { cache: 'no-store' });
-        if (!active) {
-          return;
-        }
-        if (!res.ok) {
-          setAuthenticated(false);
-          return;
-        }
-        const payload = (await res.json()) as SessionResponse;
-        if (!active) {
-          return;
-        }
-        setAuthenticated(Boolean(payload.authenticated));
-      } catch {
-        if (active) {
-          setAuthenticated(false);
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void loadSession();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const href = authenticated ? '/play' : '/api/auth/login?return_to=%2Fplay';
-  const label = loading
-    ? '登录状态检查中...'
-    : authenticated
-      ? '已登录，快速开战'
-      : '使用 SecondMe 登录并开始';
-  const className = authenticated ? 'btn btn--primary btn--lg' : 'btn btn--gradient btn--lg';
-
-  return (
-    <Link href={href} className={className} aria-busy={loading ? 'true' : undefined}>
-      {label}
-    </Link>
-  );
-}
-
 export function HomeRecentUsersTicker() {
   const [users, setUsers] = useState<RecentUser[]>([]);
 
@@ -223,9 +163,6 @@ export function HomeRecentUsersTicker() {
           <span className="hero-community__dot" aria-hidden="true" />
           最近登录：{recentCount} 位 SecondMe 玩家
         </p>
-        <Link href="/play" className="hero-community__cta">
-          我也要参赛
-        </Link>
       </div>
       <div className="hero-community__track">
         <div className="hero-community__marquee">
@@ -233,16 +170,14 @@ export function HomeRecentUsersTicker() {
             const displayName = resolveDisplayName(user);
 
             return (
-              <Link
+              <div
                 key={`${user.id}-${index}`}
-                href="/play"
                 className="hero-community__item"
-                title={`${displayName} 正在玩，点击立即加入`}
+                title={`${displayName} 正在玩`}
               >
                 <CommunityAvatar user={user} displayName={displayName} />
                 <span className="hero-community__name">{displayName}</span>
-                <span className="hero-community__join">加入</span>
-              </Link>
+              </div>
             );
           })}
         </div>

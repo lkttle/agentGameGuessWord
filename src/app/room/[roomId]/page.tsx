@@ -21,14 +21,15 @@ interface Participant {
   seatOrder: number;
   ownerUserId?: string | null;
   agentSource?: 'SELF' | 'PLATFORM' | null;
+  avatarUrl?: string | null;
+  selfIntroduction?: string | null;
   status?: 'ACTIVE';
-  score?: number;
 }
 
 interface RoundLogEntry {
   id: string;
   roundIndex: number;
-  participantId: string;
+  actorId: string;
   guessWord: string;
   isCorrect: boolean;
   scoreDelta: number;
@@ -55,6 +56,13 @@ interface SessionData {
   user?: { id: string; name?: string | null };
 }
 
+interface PinyinQuestion {
+  initials: string[];
+  initialsText: string;
+  answer: string;
+  category: string;
+}
+
 /* ----------------------------------------------------------------
    API helper
    ---------------------------------------------------------------- */
@@ -78,64 +86,133 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 /* ----------------------------------------------------------------
-   Word Display Component
+   Time limit by player count
    ---------------------------------------------------------------- */
-function WordDisplay({ hint }: { hint: string }) {
-  const letters = hint.split('');
+function getTimeLimitSeconds(playerCount: number): number {
+  if (playerCount <= 2) return 180;
+  if (playerCount <= 4) return 300;
+  return 480;
+}
+
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/* ----------------------------------------------------------------
+   Avatar fallback gradients
+   ---------------------------------------------------------------- */
+const avatarGradients = [
+  'linear-gradient(135deg, #7C3AED, #A855F7)',
+  'linear-gradient(135deg, #EC4899, #F472B6)',
+  'linear-gradient(135deg, #F59E0B, #F97316)',
+  'linear-gradient(135deg, #0EA5E9, #38BDF8)',
+  'linear-gradient(135deg, #14B8A6, #34D399)',
+];
+
+function getAvatarGradient(index: number): string {
+  return avatarGradients[index % avatarGradients.length];
+}
+
+/* ----------------------------------------------------------------
+   TTS Helper - auto-play agent responses
+   ---------------------------------------------------------------- */
+async function playTTS(text: string, userId?: string | null) {
+  try {
+    const body: Record<string, string> = { text, emotion: 'happy' };
+    if (userId) body.userId = userId;
+    const res = await api<{ code: number; data: { url: string } }>('/api/secondme/tts', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    if (res.data?.url) {
+      const audio = new Audio(res.data.url);
+      audio.volume = 0.7;
+      void audio.play().catch(() => { /* autoplay may be blocked */ });
+    }
+  } catch {
+    // TTS is best-effort, don't block game flow
+  }
+}
+
+/* ----------------------------------------------------------------
+   Player Card Component - Social profile card with selfIntroduction
+   ---------------------------------------------------------------- */
+function PlayerCard({ participant, score, rank }: {
+  participant: Participant;
+  score: number;
+  rank: number;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const initial = participant.displayName.charAt(0).toUpperCase();
+  const isHuman = participant.participantType === PARTICIPANT_TYPES.HUMAN;
+  const label = isHuman ? '玩家' : (participant.agentSource === 'SELF' ? '我的Agent' : 'Agent');
+  const hasAvatar = Boolean(participant.avatarUrl) && !imgFailed;
+
   return (
-    <div className="word-display">
-      <div className="word-display__label">拼音首字母提示</div>
-      <div className="word-display__letters">
-        {letters.map((letter, i) => (
-          <div
-            key={i}
-            className={`word-display__letter ${
-              letter !== '_' ? 'word-display__letter--revealed' : 'word-display__letter--blank'
-            }`}
-          >
-            {letter === '_' ? '\u00A0' : letter}
-          </div>
-        ))}
+    <div className="player-card">
+      {rank <= 3 && score > 0 && (
+        <div className="player-card__rank">
+          {rank === 1 ? '🥇' : rank === 2 ? '🥈' : '🥉'}
+        </div>
+      )}
+      <div
+        className="player-card__avatar"
+        style={hasAvatar ? undefined : { background: getAvatarGradient(participant.seatOrder - 1) }}
+      >
+        {hasAvatar ? (
+          <img
+            src={participant.avatarUrl!}
+            alt={participant.displayName}
+            className="player-card__avatar-img"
+            referrerPolicy="no-referrer"
+            onError={() => setImgFailed(true)}
+          />
+        ) : (
+          <span className="player-card__avatar-initial">{initial}</span>
+        )}
+      </div>
+      <div className="player-card__info">
+        <div className="player-card__name">{participant.displayName}</div>
+        <div className="player-card__badge-row">
+          <span className={`player-card__badge ${isHuman ? 'player-card__badge--human' : 'player-card__badge--agent'}`}>
+            {label}
+          </span>
+          <span className="player-card__score">{score} 分</span>
+        </div>
+        {participant.selfIntroduction && (
+          <div className="player-card__intro">{participant.selfIntroduction}</div>
+        )}
       </div>
     </div>
   );
 }
 
 /* ----------------------------------------------------------------
-   Player Card
+   Mini Avatar for chat bubbles
    ---------------------------------------------------------------- */
-function PlayerCard({ participant, isHost, scores }: {
-  participant: Participant;
-  isHost: boolean;
-  scores: Map<string, number>;
-}) {
+function MiniAvatar({ participant }: { participant: Participant }) {
+  const [imgFailed, setImgFailed] = useState(false);
   const initial = participant.displayName.charAt(0).toUpperCase();
-  const score = scores.get(participant.id) ?? 0;
-  const avatarClass = participant.participantType === PARTICIPANT_TYPES.HUMAN
-    ? 'player-card__avatar--human' : 'player-card__avatar--agent';
-  const agentBadge = participant.participantType === PARTICIPANT_TYPES.AGENT
-    ? participant.agentSource === 'SELF'
-      ? 'SELF'
-      : 'PLATFORM'
-    : null;
-  const participantTypeLabel = participant.participantType === PARTICIPANT_TYPES.HUMAN ? '人类' : 'Agent';
+  const hasAvatar = Boolean(participant.avatarUrl) && !imgFailed;
 
   return (
-    <div className="player-card">
-      <div className={`player-card__avatar ${avatarClass}`}>{initial}</div>
-      <div className="player-card__info">
-        <div className="player-card__name">
-          {participant.displayName}
-          {isHost && <span style={{ fontSize: '0.75rem', color: 'var(--color-accent)', marginLeft: '6px' }}>房主</span>}
-          {agentBadge && (
-            <span style={{ fontSize: '0.72rem', color: 'var(--color-primary)', marginLeft: '6px' }}>
-              {agentBadge}
-            </span>
-          )}
-        </div>
-        <div className="player-card__type">{participantTypeLabel}</div>
-      </div>
-      <div className="player-card__score">{score}</div>
+    <div
+      className="chat-bubble__mini-avatar"
+      style={hasAvatar ? undefined : { background: getAvatarGradient(participant.seatOrder - 1) }}
+    >
+      {hasAvatar ? (
+        <img
+          src={participant.avatarUrl!}
+          alt=""
+          className="chat-bubble__mini-avatar-img"
+          referrerPolicy="no-referrer"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <span className="chat-bubble__mini-avatar-text">{initial}</span>
+      )}
     </div>
   );
 }
@@ -150,15 +227,22 @@ export default function RoomPage() {
   const [session, setSession] = useState<SessionData | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
-  const [targetWord, setTargetWord] = useState('吃饭');
   const [guessWord, setGuessWord] = useState('');
+  const [currentQuestion, setCurrentQuestion] = useState<PinyinQuestion | null>(null);
+  const [failedRounds, setFailedRounds] = useState(0);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [timerStarted, setTimerStarted] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const autoFinishRef = useRef(false);
+  const ttsPlayedRef = useRef(new Set<string>());
 
   // Compute scores from round logs
   const scores = new Map<string, number>();
   if (roomState?.room.match?.roundLogs) {
     for (const log of roomState.room.match.roundLogs) {
-      scores.set(log.participantId, (scores.get(log.participantId) ?? 0) + log.scoreDelta);
+      scores.set(log.actorId, (scores.get(log.actorId) ?? 0) + log.scoreDelta);
     }
   }
 
@@ -170,10 +254,10 @@ export default function RoomPage() {
   const humanParticipant = participants.find(p => p.participantType === PARTICIPANT_TYPES.HUMAN);
   const agentParticipants = participants.filter(p => p.participantType === PARTICIPANT_TYPES.AGENT);
 
-  // Generate hint from target word
-  const hint = targetWord
-    ? targetWord[0] + '_'.repeat(targetWord.length - 1)
-    : '';
+  // Rank participants by score
+  const rankedParticipants = [...participants].sort(
+    (a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0)
+  );
 
   const fetchRoom = useCallback(async () => {
     try {
@@ -183,6 +267,28 @@ export default function RoomPage() {
       // Silently handle polling errors
     }
   }, [roomId]);
+
+  // Fetch a new question from the API
+  async function fetchQuestion() {
+    try {
+      const res = await api<{ questions: PinyinQuestion[] }>('/api/questions/generate', {
+        method: 'POST',
+        body: JSON.stringify({ count: 1 })
+      });
+      if (res.questions.length > 0) {
+        setCurrentQuestion(res.questions[0]);
+        setFailedRounds(0);
+      }
+    } catch {
+      setCurrentQuestion({
+        initials: ['C', 'F'],
+        initialsText: 'CF',
+        answer: '吃饭',
+        category: '动作'
+      });
+      setFailedRounds(0);
+    }
+  }
 
   // Load session + initial room state
   useEffect(() => {
@@ -196,6 +302,46 @@ export default function RoomPage() {
     void init();
   }, [fetchRoom]);
 
+  // Fetch first question when match starts
+  useEffect(() => {
+    if (room?.status === 'RUNNING' && !currentQuestion) {
+      void fetchQuestion();
+    }
+  }, [room?.status, currentQuestion]);
+
+  // Start countdown timer when game begins
+  useEffect(() => {
+    if (room?.status === 'RUNNING' && !timerStarted && participants.length >= 2) {
+      const limit = getTimeLimitSeconds(participants.length);
+      setTimeLeft(limit);
+      setTimerStarted(true);
+    }
+  }, [room?.status, timerStarted, participants.length]);
+
+  // Countdown tick
+  useEffect(() => {
+    if (timeLeft === null || timeLeft <= 0 || room?.status !== 'RUNNING') return;
+
+    timerRef.current = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev === null || prev <= 1) return 0;
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [timeLeft !== null && timeLeft > 0, room?.status]);
+
+  // Auto-finish when timer reaches 0
+  useEffect(() => {
+    if (timeLeft === 0 && room?.status === 'RUNNING' && isHost && !autoFinishRef.current) {
+      autoFinishRef.current = true;
+      void handleFinish();
+    }
+  }, [timeLeft, room?.status, isHost]);
+
   // Polling
   useEffect(() => {
     if (!roomId) return;
@@ -204,6 +350,24 @@ export default function RoomPage() {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
   }, [roomId, fetchRoom]);
+
+  // Auto-scroll chat log
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [roomState?.room.match?.roundLogs?.length]);
+
+  // Auto-play TTS for new agent responses
+  useEffect(() => {
+    if (!match?.roundLogs) return;
+    for (const log of match.roundLogs) {
+      const player = participants.find(p => p.id === log.actorId);
+      if (ttsPlayedRef.current.has(log.id)) continue;
+      if (player?.participantType === PARTICIPANT_TYPES.AGENT && log.guessWord) {
+        ttsPlayedRef.current.add(log.id);
+        void playTTS(log.guessWord, player.ownerUserId ?? player.userId);
+      }
+    }
+  }, [match?.roundLogs, participants]);
 
   async function runAction(label: string, action: () => Promise<void>) {
     try {
@@ -218,23 +382,36 @@ export default function RoomPage() {
     }
   }
 
-  async function handleStart() {
-    await runAction('开始对局中...', async () => {
-      await api(`/api/rooms/${roomId}/start`, { method: 'POST', body: '{}' });
-    });
-  }
-
   async function handleAgentRound() {
-    await runAction('Agent 回合进行中...', async () => {
+    if (!currentQuestion) return;
+    const prevLogCount = match?.roundLogs?.length ?? 0;
+    await runAction('Agent 对战中...', async () => {
       await api(`/api/matches/${match!.id}/agent-round`, {
         method: 'POST',
-        body: JSON.stringify({ targetWord, roundIndex: (match?.totalRounds ?? 0) + 1 })
+        body: JSON.stringify({
+          targetWord: currentQuestion.answer,
+          roundIndex: (match?.totalRounds ?? 0) + 1
+        })
       });
     });
+    const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
+    if (freshState) {
+      setRoomState(freshState);
+      const newLogs = freshState.room.match?.roundLogs ?? [];
+      const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
+      const anyCorrect = latestLogs.some(l => l.isCorrect);
+      if (anyCorrect) {
+        void fetchQuestion();
+      } else {
+        setFailedRounds(prev => prev + 1);
+      }
+    }
   }
 
   async function handleHumanMove() {
     if (!guessWord.trim()) { setError('请输入你猜测的中文词语'); return; }
+    if (!currentQuestion) { setError('正在加载题目...'); return; }
+    const prevLogCount = match?.roundLogs?.length ?? 0;
     await runAction('提交猜词中...', async () => {
       await api(`/api/matches/${match!.id}/human-move`, {
         method: 'POST',
@@ -242,12 +419,24 @@ export default function RoomPage() {
           participantId: humanParticipant?.id,
           agentParticipantId: agentParticipants[0]?.id,
           autoAgentResponse: true,
-          targetWord,
+          targetWord: currentQuestion!.answer,
           guessWord: guessWord.trim()
         })
       });
       setGuessWord('');
     });
+    const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
+    if (freshState) {
+      setRoomState(freshState);
+      const newLogs = freshState.room.match?.roundLogs ?? [];
+      const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
+      const anyCorrect = latestLogs.some(l => l.isCorrect);
+      if (anyCorrect) {
+        void fetchQuestion();
+      } else {
+        setFailedRounds(prev => prev + 1);
+      }
+    }
   }
 
   async function handleFinish() {
@@ -267,254 +456,216 @@ export default function RoomPage() {
   // Loading state
   if (!roomState) {
     return (
-      <div className="room-page">
-        <div className="room-body flex-center" style={{ minHeight: '50vh' }}>
+      <div className="chatroom">
+        <div className="chatroom__loading">
           <span className="loading-spinner" />
         </div>
       </div>
     );
   }
 
-  const statusClass = room?.status === 'RUNNING' ? 'running'
-    : room?.status === 'FINISHED' ? 'finished' : 'waiting';
+  const showHint = failedRounds >= 2 && currentQuestion;
+  const timerUrgent = timeLeft !== null && timeLeft <= 30;
 
   return (
-    <div className="room-page">
-      {/* Room Header */}
-      <div className="room-header">
-        <div className="room-header__inner">
-          <div className="room-header__info">
-              <span className="room-header__mode">
-              {room?.mode === GAME_MODES.AGENT_VS_AGENT ? '多 Agent 对战' : '人类 vs Agent'}
+    <div className="chatroom">
+      <div className="chatroom__container">
+        {/* Header Bar */}
+        <div className="chatroom__header">
+          <div className="chatroom__header-left">
+            <span className="chatroom__mode-tag">
+              {room?.mode === GAME_MODES.AGENT_VS_AGENT ? 'Agent对战' : '玩家VS Agent'}
+            </span>
+            <span className="chatroom__round-tag">
+              第 {match?.totalRounds || 0} 回合
+            </span>
+          </div>
+          <div className="chatroom__header-right">
+            {room?.status === 'RUNNING' && timeLeft !== null && (
+              <span className={`chatroom__timer ${timerUrgent ? 'chatroom__timer--urgent' : ''}`}>
+                {formatTime(timeLeft)}
               </span>
-            <h1 className="room-header__title">猜词对战房间</h1>
-            <span className="room-header__id">房间号：{roomId}</span>
-          </div>
-          <div className={`room-status-badge room-status-badge--${statusClass}`}>
-            <span className="room-status-badge__dot" />
-            {room?.status}
+            )}
+            <div className={`chatroom__status chatroom__status--${room?.status?.toLowerCase()}`}>
+              <span className="chatroom__status-dot" />
+              {room?.status === 'WAITING' ? '等待中' : room?.status === 'RUNNING' ? '对战中' : '已结束'}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Room Body */}
-      <div className="room-body">
-        {error && <div className="alert alert--error mb-md">{error}</div>}
-        {busy && (
-          <div className="alert alert--info mb-md" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span className="loading-spinner" /> {busy}
-          </div>
-        )}
-        <div className="alert alert--info mb-md">
-          玩法：根据拼音首字母猜中文词语。示例：<strong>CF</strong> 可对应「吃饭 / 充分 / 出发」。
+        {/* Player Cards Grid */}
+        <div className="player-cards-grid">
+          {rankedParticipants.map((p, idx) => (
+            <PlayerCard
+              key={p.id}
+              participant={p}
+              score={scores.get(p.id) ?? 0}
+              rank={idx + 1}
+            />
+          ))}
         </div>
 
-        {/* WAITING State */}
-        {room?.status === 'WAITING' && (
-          <div className="waiting-state animate-fade-in">
-            <div>
-              <h2 className="waiting-state__title">等待参与者加入</h2>
-              <p className="waiting-state__desc">
-                房间已创建。若需更多参与者，可分享房间号。
-              </p>
-            </div>
-
-            <div style={{
-              background: 'var(--purple-50)',
-              borderRadius: 'var(--radius-md)',
-              padding: 'var(--space-lg)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '1.1rem',
-              fontWeight: 600,
-              letterSpacing: '0.02em',
-              color: 'var(--color-primary)',
-              wordBreak: 'break-all'
-            }}>
-              {roomId}
-            </div>
-
-            <div className="players-list">
-              {participants.map(p => (
-                <PlayerCard key={p.id} participant={p} isHost={p.userId === room.hostUserId} scores={scores} />
+        {/* Hint Display */}
+        {room?.status === 'RUNNING' && currentQuestion && (
+          <div className="chatroom__hint">
+            <div className="chatroom__hint-label">拼音首字母提示</div>
+            <div className="chatroom__hint-letters">
+              {currentQuestion.initials.map((letter, i) => (
+                <span key={i} className="chatroom__hint-letter">{letter}</span>
               ))}
-              {participants.length < 2 && (
-                <div className="player-card player-card--empty">
-                  等待对手加入...
-                </div>
-              )}
             </div>
-
-            {isHost && participants.length >= 2 && (
-              <button
-                type="button"
-                className="btn btn--gradient btn--lg"
-                onClick={() => void handleStart()}
-                disabled={!!busy}
-              >
-                开始对局
-              </button>
-            )}
-            {!isHost && (
-              <p className="text-muted" style={{ fontSize: '0.9rem' }}>
-                等待房主开始对局...
-              </p>
+            {showHint ? (
+              <div className="chatroom__hint-category chatroom__hint-category--reveal">
+                提示：{currentQuestion.category}
+              </div>
+            ) : (
+              <div className="chatroom__hint-category">
+                {failedRounds > 0 ? `已猜 ${failedRounds} 轮未中，再猜一轮将给出提示` : '请猜词'}
+              </div>
             )}
           </div>
         )}
 
-        {/* RUNNING State */}
-        {room?.status === 'RUNNING' && match && (
-          <div className="arena animate-fade-in">
-            <div className="arena__main">
-              {/* Word Display */}
-              <WordDisplay hint={hint} />
+        {/* Chat Messages Area - Left/Right Layout */}
+        <div className="chatroom__messages">
+          {error && <div className="alert alert--error mb-md">{error}</div>}
+          {busy && (
+            <div className="chatroom__system-msg">
+              <span className="loading-spinner" /> {busy}
+            </div>
+          )}
 
-              {/* Round Info */}
-              <div className="round-info">
-                <div className="round-info__item">
-                  <div className="round-info__label">回合</div>
-                  <div className="round-info__value">{match.totalRounds || 1}</div>
-                </div>
-                <div className="round-info__item">
-                  <div className="round-info__label">状态</div>
-                  <div className="round-info__value" style={{ color: 'var(--color-success)' }}>
-                    {match.status}
-                  </div>
-                </div>
-                <div className="round-info__item">
-                  <div className="round-info__label">模式</div>
-                  <div className="round-info__value">
-                    {room.mode === GAME_MODES.AGENT_VS_AGENT ? 'A2A' : 'HvA'}
-                  </div>
-                </div>
-              </div>
+          {room?.status === 'WAITING' && (
+            <div className="chatroom__system-msg">
+              房间已创建，等待开始...共 {participants.length} 名参与者
+            </div>
+          )}
 
-              {/* Game Controls */}
-              {isHost && (
-                <div className="card">
-                  <h3 style={{ marginBottom: 'var(--space-md)', fontSize: '1rem' }}>对局控制</h3>
-                  <div className="form-group mb-md">
-                    <label className="form-label" htmlFor="target-word">标准答案词语（2-4字）</label>
-                    <input
-                      id="target-word"
-                      className="input"
-                      value={targetWord}
-                      onChange={e => setTargetWord(e.target.value.trim())}
-                      placeholder="请输入答案词语，例如：吃饭"
-                      style={{ fontFamily: 'var(--font-mono)' }}
-                    />
-                  </div>
-
-                  {room.mode === GAME_MODES.AGENT_VS_AGENT ? (
-                    <button
-                      type="button"
-                      className="btn btn--primary btn--full"
-                      onClick={() => void handleAgentRound()}
-                      disabled={!!busy}
-                    >
-                      运行多 Agent 回合
-                    </button>
-                  ) : (
-                    <div style={{ display: 'grid', gap: 'var(--space-sm)' }}>
-                      <div className="guess-form">
-                        <input
-                          className="input"
-                          value={guessWord}
-                          onChange={e => setGuessWord(e.target.value)}
-                          placeholder="输入你猜的中文词语"
-                          onKeyDown={e => { if (e.key === 'Enter') void handleHumanMove(); }}
-                        />
-                        <button
-                          type="button"
-                          className="btn btn--primary"
-                          onClick={() => void handleHumanMove()}
-                          disabled={!!busy}
-                        >
-                          提交猜词
-                        </button>
+          {match?.roundLogs && match.roundLogs.length > 0 && (
+            <>
+              {match.roundLogs.map((log) => {
+                const player = participants.find(p => p.id === log.actorId);
+                const isMe = player?.userId === session?.user?.id;
+                const isAgent = player?.participantType === PARTICIPANT_TYPES.AGENT;
+                return (
+                  <div
+                    key={log.id}
+                    className={`chat-bubble ${isMe ? 'chat-bubble--me' : 'chat-bubble--other'}`}
+                  >
+                    {!isMe && player && <MiniAvatar participant={player} />}
+                    <div className="chat-bubble__body">
+                      <div className="chat-bubble__sender">
+                        {player?.displayName ?? '?'}
+                        <span className="chat-bubble__round">R{log.roundIndex}</span>
+                        {isAgent && (
+                          <span className="chat-bubble__tts-icon" title="语音播放" onClick={() => {
+                            if (log.guessWord) void playTTS(log.guessWord, player?.ownerUserId ?? player?.userId);
+                          }}>
+                            &#9835;
+                          </span>
+                        )}
+                      </div>
+                      <div className="chat-bubble__content">
+                        <span className="chat-bubble__word">{log.guessWord}</span>
+                        <span className={`chat-bubble__result ${log.isCorrect ? 'chat-bubble__result--correct' : 'chat-bubble__result--wrong'}`}>
+                          {log.isCorrect ? '+1' : '未中'}
+                        </span>
                       </div>
                     </div>
-                  )}
+                    {isMe && player && <MiniAvatar participant={player} />}
+                  </div>
+                );
+              })}
+            </>
+          )}
 
+          {room?.status === 'FINISHED' && (
+            <div className="chatroom__finish-card">
+              <h2>{timeLeft === 0 ? '时间到！' : '对局结束！'}</h2>
+              <div className="chatroom__final-ranking">
+                {rankedParticipants.map((p, idx) => (
+                  <div key={p.id} className="chatroom__rank-item">
+                    <span className="chatroom__rank-pos">#{idx + 1}</span>
+                    <span className="chatroom__rank-name">{p.displayName}</span>
+                    <span className="chatroom__rank-score">{scores.get(p.id) ?? 0} 分</span>
+                  </div>
+                ))}
+              </div>
+              <div className="chatroom__finish-actions">
+                {match && (
+                  <Link href={`/results/${match.id}`} className="btn btn--gradient">
+                    查看战报
+                  </Link>
+                )}
+                <Link href="/" className="btn btn--secondary">
+                  再来一局
+                </Link>
+                <Link href="/leaderboard" className="btn btn--ghost">
+                  排行榜
+                </Link>
+              </div>
+            </div>
+          )}
+
+          <div ref={chatEndRef} />
+        </div>
+
+        {/* Bottom Input Bar */}
+        {room?.status === 'RUNNING' && match && (
+          <div className="chatroom__input-bar">
+            {isHost && room.mode === GAME_MODES.AGENT_VS_AGENT ? (
+              <div className="chatroom__agent-controls">
+                <button
+                  type="button"
+                  className="btn btn--primary btn--full"
+                  onClick={() => void handleAgentRound()}
+                  disabled={!!busy}
+                >
+                  运行 Agent 回合
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--accent"
+                  onClick={() => void handleFinish()}
+                  disabled={!!busy}
+                >
+                  结束对局
+                </button>
+              </div>
+            ) : room.mode === GAME_MODES.HUMAN_VS_AGENT ? (
+              <>
+                <div className="chatroom__guess-row">
+                  <input
+                    className="chatroom__guess-input"
+                    value={guessWord}
+                    onChange={e => setGuessWord(e.target.value)}
+                    placeholder="输入你猜的中文词语..."
+                    onKeyDown={e => { if (e.key === 'Enter') void handleHumanMove(); }}
+                  />
                   <button
                     type="button"
-                    className="btn btn--accent btn--full mt-md"
-                    onClick={() => void handleFinish()}
+                    className="btn btn--primary chatroom__send-btn"
+                    onClick={() => void handleHumanMove()}
                     disabled={!!busy}
                   >
-                    结束对局并结算
+                    发送
                   </button>
                 </div>
-              )}
-            </div>
-
-            {/* Sidebar */}
-            <div className="arena__sidebar">
-              {/* Players */}
-              <div className="card">
-                <h3 style={{ marginBottom: 'var(--space-md)', fontSize: '1rem' }}>参与者</h3>
-                <div className="players-list">
-                  {participants.map(p => (
-                    <PlayerCard key={p.id} participant={p} isHost={p.userId === room.hostUserId} scores={scores} />
-                  ))}
-                </div>
-              </div>
-
-              {/* Round Log */}
-              {match.roundLogs && match.roundLogs.length > 0 && (
-                <div className="round-log">
-                  <div className="round-log__header">回合记录</div>
-                  <div className="round-log__list">
-                    {match.roundLogs.map((log) => {
-                      const player = participants.find(p => p.id === log.participantId);
-                      return (
-                        <div key={log.id} className="round-log__item">
-                          <span className="round-log__round">R{log.roundIndex}</span>
-                          <span className="round-log__player">{player?.displayName ?? '?'}</span>
-                          <span className="round-log__word">{log.guessWord}</span>
-                          <span className={`round-log__result ${log.isCorrect ? 'round-log__result--correct' : 'round-log__result--wrong'}`}>
-                            {log.isCorrect ? '命中' : '未中'}
-                          </span>
-                          <span className="round-log__score">
-                            {log.scoreDelta > 0 ? `+${log.scoreDelta}` : log.scoreDelta}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* FINISHED State */}
-        {room?.status === 'FINISHED' && match && (
-          <div className="waiting-state animate-fade-in">
-            <div>
-              <h2 className="waiting-state__title">对局结束！</h2>
-              <p className="waiting-state__desc">可查看完整结果并继续下一局拼音猜词对战。</p>
-            </div>
-
-            <div className="players-list">
-              {participants
-                .sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0))
-                .map(p => (
-                  <PlayerCard key={p.id} participant={p} isHost={p.userId === room.hostUserId} scores={scores} />
-                ))}
-            </div>
-
-            <div style={{ display: 'flex', gap: 'var(--space-md)', justifyContent: 'center', flexWrap: 'wrap' }}>
-              <Link href={`/results/${match.id}`} className="btn btn--gradient btn--lg">
-                查看完整结果
-              </Link>
-              <Link href="/play" className="btn btn--secondary btn--lg">
-                再来一局
-              </Link>
-              <Link href="/leaderboard" className="btn btn--ghost btn--lg">
-                排行榜
-              </Link>
-            </div>
+                {isHost && (
+                  <button
+                    type="button"
+                    className="btn btn--accent btn--sm"
+                    onClick={() => void handleFinish()}
+                    disabled={!!busy}
+                    style={{ marginTop: 'var(--space-xs)' }}
+                  >
+                    结束对局
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className="chatroom__system-msg">等待房主操作...</div>
+            )}
           </div>
         )}
       </div>

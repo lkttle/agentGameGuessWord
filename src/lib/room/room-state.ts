@@ -25,6 +25,8 @@ export interface RoomParticipantView {
   seatOrder: number;
   ownerUserId: string | null;
   agentSource: AgentSource | null;
+  avatarUrl: string | null;
+  selfIntroduction: string | null;
   status: 'ACTIVE';
 }
 
@@ -35,7 +37,9 @@ export function inferAgentSource(participant: Participant): AgentSource | null {
   return participant.userId ? AGENT_SOURCES.SELF : AGENT_SOURCES.PLATFORM;
 }
 
-export function toRoomParticipantView(participant: Participant): RoomParticipantView {
+export function toRoomParticipantView(
+  participant: Participant & { user?: { avatarUrl?: string | null; selfIntroduction?: string | null } | null }
+): RoomParticipantView {
   const ownerUserId = participant.userId;
   return {
     id: participant.id,
@@ -45,6 +49,8 @@ export function toRoomParticipantView(participant: Participant): RoomParticipant
     seatOrder: participant.seatOrder,
     ownerUserId,
     agentSource: inferAgentSource(participant),
+    avatarUrl: participant.user?.avatarUrl ?? null,
+    selfIntroduction: participant.user?.selfIntroduction ?? null,
     status: 'ACTIVE'
   };
 }

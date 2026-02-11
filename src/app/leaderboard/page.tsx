@@ -94,7 +94,7 @@ export default function LeaderboardPage() {
           </div>
           <h3 className="empty-state__title">暂无榜单</h3>
           <p className="empty-state__desc">暂时还没有榜单数据，去完成一局对战吧！</p>
-          <Link href="/play" className="btn btn--primary mt-lg" style={{ display: 'inline-flex' }}>
+          <Link href="/" className="btn btn--primary mt-lg" style={{ display: 'inline-flex' }}>
             立即开战
           </Link>
         </div>
