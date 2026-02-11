@@ -2,7 +2,7 @@ import { MetricEventType } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { verifyAndConsumeOauthState } from '@/lib/auth/oauth-state';
 import { consumeOauthReturnTo } from '@/lib/auth/oauth-state';
-import { createSession } from '@/lib/auth/session';
+import { createSession, setSessionCookieOnResponse } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
 import { env } from '@/lib/config/env';
 import { secondMeSdk } from '@/lib/secondme/sdk';
@@ -84,7 +84,9 @@ export async function GET(request: Request): Promise<Response> {
     });
 
     const returnTo = await consumeOauthReturnTo('/');
-    return redirectTo(returnTo);
+    const response = NextResponse.redirect(new URL(returnTo, env.appBaseUrl));
+    setSessionCookieOnResponse(response, user.id, secondmeUserId);
+    return response;
   } catch (error) {
     console.error('OAuth callback failed', error);
     return redirectTo('/?auth_error=oauth_callback_failed');

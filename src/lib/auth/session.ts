@@ -64,6 +64,26 @@ export async function createSession(userId: string, secondmeUserId: string): Pro
   });
 }
 
+export function setSessionCookieOnResponse(
+  response: import('next/server').NextResponse,
+  userId: string,
+  secondmeUserId: string
+): void {
+  const iat = Math.floor(Date.now() / 1000);
+  const exp = iat + SESSION_TTL_SECONDS;
+  const token = encode({ userId, secondmeUserId, iat, exp });
+
+  response.cookies.set({
+    name: SESSION_COOKIE_NAME,
+    value: token,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: SESSION_TTL_SECONDS
+  });
+}
+
 export async function getSession(): Promise<SessionPayload | null> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE_NAME)?.value;
