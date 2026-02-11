@@ -101,7 +101,8 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
       `拼音首字母提示：${pinyinInitials}。`,
       categoryPrompt,
       previousGuessesPrompt,
-      '请直接输出一个最可能的中文词语（2-4个汉字），不要解释。'
+      '请先自由地说出你的推理和联想，再给出你最终猜测的中文词语。',
+      '最终猜测务必用【答案：xxx】格式单独写在最后一行。'
     ].join('');
 
     // Get existing session ID for continuity

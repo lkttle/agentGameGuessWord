@@ -148,19 +148,78 @@ function getAvatarGradient(index: number): string {
 const ttsQueue: Array<() => Promise<boolean>> = [];
 let ttsProcessing = false;
 let activeAudioElement: HTMLAudioElement | null = null;
+let reusableAudioElement: HTMLAudioElement | null = null;
 let ttsSessionVersion = 0;
+let audioUnlocked = false;
+let audioUnlockPromise: Promise<void> | null = null;
 const MAX_TTS_ATTEMPTS = 3;
 const AGENT_REPLY_GAP_MS = 2000;
 const MAX_FAILED_ROUNDS_BEFORE_REVEAL = 3;
+const SILENT_AUDIO_DATA_URL = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=';
+
+function getReusableAudio(): HTMLAudioElement {
+  if (!reusableAudioElement) {
+    reusableAudioElement = new Audio();
+    reusableAudioElement.preload = 'auto';
+    reusableAudioElement.setAttribute('playsinline', 'true');
+    reusableAudioElement.setAttribute('webkit-playsinline', 'true');
+  }
+  return reusableAudioElement;
+}
+
+async function unlockAudioPlayback(trigger: string): Promise<void> {
+  if (audioUnlocked) return;
+
+  if (audioUnlockPromise) {
+    await audioUnlockPromise;
+    return;
+  }
+
+  audioUnlockPromise = (async () => {
+    try {
+      const audio = getReusableAudio();
+      audio.muted = true;
+      audio.src = SILENT_AUDIO_DATA_URL;
+      audio.currentTime = 0;
+      await audio.play();
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+      audioUnlocked = true;
+      ttsClientLog('audio_unlock_success', { trigger });
+    } catch (error) {
+      ttsClientLog('audio_unlock_failed', {
+        trigger,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      const audio = getReusableAudio();
+      audio.muted = false;
+      audioUnlockPromise = null;
+    }
+  })();
+
+  await audioUnlockPromise;
+}
 
 function stopAllTTSPlayback(): void {
   ttsSessionVersion += 1;
   ttsQueue.length = 0;
   ttsProcessing = false;
+  audioUnlockPromise = null;
   if (activeAudioElement) {
+    activeAudioElement.onended = null;
+    activeAudioElement.onerror = null;
     activeAudioElement.pause();
     activeAudioElement.currentTime = 0;
+    activeAudioElement.src = '';
     activeAudioElement = null;
+  }
+
+  if (reusableAudioElement) {
+    reusableAudioElement.pause();
+    reusableAudioElement.currentTime = 0;
+    reusableAudioElement.src = '';
   }
 }
 
@@ -180,6 +239,11 @@ function ttsClientLog(event: string, payload?: Record<string, unknown>): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function questionToKey(question: PinyinQuestion | null): string {
+  if (!question) return '';
+  return `${question.initialsText}|${question.answer}|${question.category}`;
 }
 
 async function drainTtsQueue() {
@@ -221,6 +285,10 @@ async function playTTS(
       try {
         if (sessionVersion !== ttsSessionVersion) {
           return settle(false);
+        }
+
+        if (!audioUnlocked) {
+          await unlockAudioPlayback('tts_attempt');
         }
 
         ttsClientLog('request_start', {
@@ -277,12 +345,19 @@ async function playTTS(
           return settle(false);
         }
 
-        const audio = new Audio(url);
-        activeAudioElement = audio;
+        const audio = getReusableAudio();
+        audio.pause();
+        audio.currentTime = 0;
+        audio.src = url;
         audio.volume = 0.7;
+        audio.muted = false;
+        audio.setAttribute('playsinline', 'true');
+        audio.setAttribute('webkit-playsinline', 'true');
+        activeAudioElement = audio;
         ttsClientLog('audio_play_start', {
           url,
-          participantId: options?.participantId ?? null
+          participantId: options?.participantId ?? null,
+          audioUnlocked
         });
 
         const played = await new Promise<boolean>((audioResolve) => {
@@ -332,8 +407,14 @@ async function playTTS(
             if (activeAudioElement === audio) {
               activeAudioElement = null;
             }
+
+            if (!audioUnlocked) {
+              void unlockAudioPlayback('play_rejected_retry');
+            }
+
             ttsClientLog('audio_play_rejected', {
               participantId: options?.participantId ?? null,
+              audioUnlocked,
               error: error instanceof Error ? error.message : String(error)
             });
             audioResolve(false);
@@ -498,6 +579,7 @@ export default function RoomPage() {
   const failedRoundsRef = useRef(0);
   const switchingQuestionRef = useRef(false);
   const autoAgentRunningRef = useRef(false);
+  const currentQuestionKeyRef = useRef('');
   const [revealedAgentLogIds, setRevealedAgentLogIds] = useState<string[]>([]);
 
   const revealAgentLog = useCallback((logId: string) => {
@@ -586,6 +668,13 @@ export default function RoomPage() {
 
   // Fetch a new question from the API
   const fetchQuestion = useCallback(async () => {
+    if (switchingQuestionRef.current) {
+      return;
+    }
+
+    switchingQuestionRef.current = true;
+    stopAllTTSPlayback();
+
     try {
       const res = await api<{ questions: PinyinQuestion[] }>('/api/questions/generate', {
         method: 'POST',
@@ -608,9 +697,10 @@ export default function RoomPage() {
         category: '动作'
       });
       setAnswerRevealText('');
-      switchingQuestionRef.current = false;
       failedRoundsRef.current = 0;
       setFailedRounds(0);
+    } finally {
+      switchingQuestionRef.current = false;
     }
   }, []);
 
@@ -625,30 +715,36 @@ export default function RoomPage() {
       return;
     }
 
-    stopAllTTSPlayback();
-    switchingQuestionRef.current = true;
     const answer = currentQuestion?.answer ?? '';
     if (answer) {
       setAnswerRevealText(`连续 ${MAX_FAILED_ROUNDS_BEFORE_REVEAL} 轮无人答中，正确答案：${answer}`);
     }
 
     await sleep(2500);
-    if (!pageActiveRef.current) {
-      switchingQuestionRef.current = false;
+    if (!pageActiveRef.current) return;
+
+    await fetchQuestion();
+  }, [currentQuestion?.answer, fetchQuestion]);
+
+  const handleRoundOutcome = useCallback(async (anyCorrect: boolean, questionKey?: string) => {
+    if (
+      questionKey &&
+      currentQuestionKeyRef.current !== questionKey
+    ) {
       return;
     }
 
-    await fetchQuestion();
-    switchingQuestionRef.current = false;
-  }, [currentQuestion?.answer, fetchQuestion]);
-
-  const handleRoundOutcome = useCallback(async (anyCorrect: boolean) => {
     if (anyCorrect) {
+      stopAllTTSPlayback();
       await fetchQuestion();
       return;
     }
     await markFailedRoundAndMaybeSwitchQuestion();
   }, [fetchQuestion, markFailedRoundAndMaybeSwitchQuestion]);
+
+  useEffect(() => {
+    currentQuestionKeyRef.current = questionToKey(currentQuestion);
+  }, [currentQuestion]);
 
   // Load session + initial room state
   useEffect(() => {
@@ -667,7 +763,7 @@ export default function RoomPage() {
     if (room?.status === 'RUNNING' && !currentQuestion) {
       void fetchQuestion();
     }
-  }, [room?.status, currentQuestion]);
+  }, [room?.status, currentQuestion, fetchQuestion]);
 
   // Start countdown timer when game begins
   useEffect(() => {
@@ -745,7 +841,18 @@ export default function RoomPage() {
   }, [roomId, fetchRoom]);
 
   useEffect(() => {
+    const onUserGesture = () => {
+      void unlockAudioPlayback('user_gesture');
+    };
+
+    window.addEventListener('pointerdown', onUserGesture, { passive: true });
+    window.addEventListener('touchstart', onUserGesture, { passive: true });
+    window.addEventListener('keydown', onUserGesture, { passive: true });
+
     return () => {
+      window.removeEventListener('pointerdown', onUserGesture);
+      window.removeEventListener('touchstart', onUserGesture);
+      window.removeEventListener('keydown', onUserGesture);
       pageActiveRef.current = false;
       runningActionRef.current = false;
       stopRoomRuntime();
@@ -891,6 +998,7 @@ export default function RoomPage() {
 
   async function handleAgentRound() {
     if (!currentQuestion || !pageActiveRef.current || switchingQuestionRef.current) return;
+    const questionKey = currentQuestionKeyRef.current;
     const prevLogCount = match?.roundLogs?.length ?? 0;
     const completed = await runAction('Agent 对战中...', async () => {
       await api(`/api/matches/${match!.id}/agent-round`, {
@@ -908,16 +1016,20 @@ export default function RoomPage() {
     const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
     if (freshState && pageActiveRef.current) {
       setRoomState(freshState);
+      if (!questionKey || currentQuestionKeyRef.current !== questionKey) {
+        return;
+      }
       const newLogs = freshState.room.match?.roundLogs ?? [];
       const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
       const anyCorrect = latestLogs.some(l => l.isCorrect);
-      await handleRoundOutcome(anyCorrect);
+      await handleRoundOutcome(anyCorrect, questionKey);
     }
   }
 
   // Agent-only round for when human times out
   async function handleAgentRoundOnly() {
     if (!currentQuestion || !pageActiveRef.current || switchingQuestionRef.current) return;
+    const questionKey = currentQuestionKeyRef.current;
     const prevLogCount = match?.roundLogs?.length ?? 0;
     const completed = await runAction('超时！Agent 回合中...', async () => {
       await api(`/api/matches/${match!.id}/agent-round`, {
@@ -935,10 +1047,13 @@ export default function RoomPage() {
     const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
     if (freshState && pageActiveRef.current) {
       setRoomState(freshState);
+      if (!questionKey || currentQuestionKeyRef.current !== questionKey) {
+        return;
+      }
       const newLogs = freshState.room.match?.roundLogs ?? [];
       const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
       const anyCorrect = latestLogs.some(l => l.isCorrect);
-      await handleRoundOutcome(anyCorrect);
+      await handleRoundOutcome(anyCorrect, questionKey);
     }
   }
 
@@ -946,6 +1061,7 @@ export default function RoomPage() {
     if (!pageActiveRef.current || switchingQuestionRef.current || runningActionRef.current) return;
     if (!guessWord.trim()) { setError('请输入你猜测的中文词语'); return; }
     if (!currentQuestion) { setError('正在加载题目...'); return; }
+    const questionKey = currentQuestionKeyRef.current;
 
     const prevLogCount = match?.roundLogs?.length ?? 0;
     const submittedWord = guessWord.trim();
@@ -1006,11 +1122,14 @@ export default function RoomPage() {
     const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
     if (freshState && pageActiveRef.current) {
       setRoomState(freshState);
+      if (!questionKey || currentQuestionKeyRef.current !== questionKey) {
+        return;
+      }
       const newLogs = freshState.room.match?.roundLogs ?? [];
       const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
       const anyCorrect = latestLogs.some((log) => log.isCorrect);
       if (latestLogs.length > 0) {
-        await handleRoundOutcome(anyCorrect);
+        await handleRoundOutcome(anyCorrect, questionKey);
       }
     }
   }
