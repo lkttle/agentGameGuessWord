@@ -576,16 +576,18 @@ function PlayerCard({ participant, score, rank, latestAnswer, onTtsPlay }: {
         )}
       </div>
       <div className="player-card__info">
-        <div className="player-card__name">{participant.displayName}</div>
+        <div className="player-card__name-row">
+          <span className="player-card__name">{participant.displayName}</span>
+          {participant.selfIntroduction && (
+            <span className="player-card__intro">{participant.selfIntroduction}</span>
+          )}
+        </div>
         <div className="player-card__badge-row">
           <span className={`player-card__badge ${isHuman ? 'player-card__badge--human' : 'player-card__badge--agent'}`}>
             {label}
           </span>
           <span className="player-card__score">{score} 分</span>
         </div>
-        {participant.selfIntroduction && (
-          <div className="player-card__intro">{participant.selfIntroduction}</div>
-        )}
         {latestAnswer ? (
           <div className={`player-card__answer ${latestAnswer.isCorrect ? 'player-card__answer--correct' : 'player-card__answer--wrong'}`}>
             <span className="player-card__answer-word">{latestAnswer.guessWord}</span>
