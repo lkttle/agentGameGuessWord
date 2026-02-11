@@ -23,6 +23,23 @@ function isValidMode(mode: unknown): mode is GameMode {
   return mode === 'AGENT_VS_AGENT' || mode === 'HUMAN_VS_AGENT';
 }
 
+async function fetchFallbackRealUsers(hostUserId: string, take: number): Promise<Array<{ id: string; name: string | null }>> {
+  if (take <= 0) return [];
+
+  const users = await prisma.user.findMany({
+    where: {
+      id: { not: hostUserId },
+      secondmeUserId: { not: null },
+      accessToken: { not: null }
+    },
+    select: { id: true, name: true },
+    orderBy: { createdAt: 'desc' },
+    take
+  });
+
+  return users;
+}
+
 export async function POST(request: Request): Promise<Response> {
   const user = await getCurrentUser();
   if (!user) {
@@ -74,16 +91,36 @@ export async function POST(request: Request): Promise<Response> {
 
   // Slots available for real agents (total - host - optional self agent)
   const realAgentSlots = requestedCount - 1 - (autoJoinSelf ? 1 : 0);
-  const standbyAgents = realAgentSlots > 0
-    ? await pickStandbyAgentsForRoom(realAgentSlots + 1)
-    : [];
-  const realUsers = standbyAgents
-    .filter((item) => item.userId !== user.id)
-    .slice(0, realAgentSlots)
-    .map((item) => ({
-      id: item.userId,
-      name: item.name
-    }));
+  let realUsers: Array<{ id: string; name: string | null }> = [];
+
+  if (realAgentSlots > 0) {
+    try {
+      const standbyAgents = await pickStandbyAgentsForRoom(realAgentSlots + 1);
+      realUsers = standbyAgents
+        .filter((item) => item.userId !== user.id)
+        .slice(0, realAgentSlots)
+        .map((item) => ({
+          id: item.userId,
+          name: item.name
+        }));
+
+      if (realUsers.length < realAgentSlots) {
+        const fallback = await fetchFallbackRealUsers(user.id, realAgentSlots + 2);
+        const used = new Set(realUsers.map((item) => item.id));
+        for (const candidate of fallback) {
+          if (candidate.id === user.id || used.has(candidate.id)) continue;
+          realUsers.push(candidate);
+          used.add(candidate.id);
+          if (realUsers.length >= realAgentSlots) break;
+        }
+      }
+    } catch (error) {
+      console.warn('[rooms:create] standby pool unavailable, fallback to direct user query', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      realUsers = await fetchFallbackRealUsers(user.id, realAgentSlots);
+    }
+  }
 
   // Build participantsConfig with real users injected
   const realUserConfigs: ParticipantConfigInput[] = realUsers.map((ru) => ({
