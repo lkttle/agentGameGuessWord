@@ -39,12 +39,6 @@ enum MetricEventType {
   MATCH_COMPLETE
 }
 
-enum WarmupCacheStatus {
-  PENDING
-  READY
-  FAILED
-}
-
 model User {
   id             String      @id @default(cuid())
   secondmeUserId String?     @unique @map("secondme_user_id")
@@ -64,8 +58,6 @@ model User {
   metricEvents   MetricEvent[]
   wonMatches     Match[]           @relation("MatchWinner")
   chatSessions   ChatSession[]
-  standbyEntry   AgentStandbyQueue?
-  warmupCaches   AgentWarmupCache[]
 
   @@index([createdAt])
   @@map("users")
@@ -130,85 +122,10 @@ model Match {
   startedAt      DateTime     @default(now()) @map("started_at")
   endedAt        DateTime?    @map("ended_at")
   roundLogs      RoundLog[]
-  queuedQuestions MatchQuestion[]
 
   @@index([status])
   @@index([winnerUserId])
   @@map("matches")
-}
-
-model AgentStandbyQueue {
-  id        String   @id @default(cuid())
-  userId    String   @unique @map("user_id")
-  user      User     @relation(fields: [userId], references: [id])
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@index([createdAt])
-  @@map("agent_standby_queue")
-}
-
-model WarmupQuestionQueue {
-  id          String   @id @default(cuid())
-  questionKey String   @unique @map("question_key")
-  initialsText String  @map("initials_text")
-  initialsJson Json    @map("initials_json")
-  answer      String   @map("answer")
-  category    String   @map("category")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  @@index([createdAt])
-  @@map("warmup_question_queue")
-}
-
-model AgentWarmupCache {
-  id            String            @id @default(cuid())
-  userId        String            @map("user_id")
-  user          User              @relation(fields: [userId], references: [id])
-  questionKey   String            @map("question_key")
-  replyText     String            @map("reply_text")
-  status        WarmupCacheStatus @default(PENDING)
-  ttsUrl        String?           @map("tts_url")
-  ttsFormat     String?           @map("tts_format")
-  ttsDurationMs Int?              @map("tts_duration_ms")
-  errorMessage  String?           @map("error_message")
-  createdAt     DateTime          @default(now()) @map("created_at")
-  updatedAt     DateTime          @updatedAt @map("updated_at")
-
-  @@unique([userId, questionKey])
-  @@index([userId, status])
-  @@index([questionKey])
-  @@index([userId, replyText])
-  @@map("agent_warmup_cache")
-}
-
-model MatchQuestion {
-  id          String   @id @default(cuid())
-  matchId     String   @map("match_id")
-  match       Match    @relation(fields: [matchId], references: [id])
-  questionKey String   @map("question_key")
-  initialsText String  @map("initials_text")
-  initialsJson Json    @map("initials_json")
-  answer      String   @map("answer")
-  category    String   @map("category")
-  consumedAt  DateTime? @map("consumed_at")
-  createdAt   DateTime @default(now()) @map("created_at")
-
-  @@unique([matchId, questionKey])
-  @@index([matchId, consumedAt, createdAt])
-  @@map("match_questions")
-}
-
-model WarmupLock {
-  lockKey    String   @id @map("lock_key")
-  ownerToken String   @map("owner_token")
-  expiresAt  DateTime @map("expires_at")
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
-
-  @@index([expiresAt])
-  @@map("warmup_locks")
 }
 
 model RoundLog {

@@ -4,7 +4,6 @@ import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { assertRoomTransition, validateRoomParticipants } from '@/lib/room/room-state';
 import { recordMetricEvent } from '@/lib/metrics/service';
-import { ensureMatchPrepared } from '@/lib/warmup/service';
 
 export async function POST(
   _request: Request,
@@ -69,8 +68,6 @@ export async function POST(
       participantCount: room.participants.length
     }
   });
-
-  void ensureMatchPrepared(result.match.id);
 
   return NextResponse.json({ room: result.updatedRoom, match: result.match });
 }

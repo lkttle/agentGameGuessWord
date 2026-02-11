@@ -13,7 +13,6 @@ import {
   runAgentTurnWithRetry
 } from '@/lib/agent/orchestrator';
 import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
-import { getCachedAgentReply } from '@/lib/agent/warmup-cache';
 
 interface AgentRoundBody {
   targetWord?: string;
@@ -97,20 +96,6 @@ export async function POST(
   const previousGuesses: string[] = [];
 
   for (const agent of agents) {
-    const questionKey = body.questionKey?.trim() || serverQuestionKey;
-    if (agent.userId && questionKey) {
-      const cached = await getCachedAgentReply(agent.userId, questionKey);
-      if (cached?.replyText) {
-        rawTurns.push({
-          participantId: agent.id,
-          guessWord: cached.replyText,
-          usedFallback: false,
-          attempts: 1
-        });
-        continue;
-      }
-    }
-
     const turn = await runAgentTurnWithRetry(
       agent.id,
       {

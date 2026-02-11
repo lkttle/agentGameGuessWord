@@ -13,7 +13,6 @@ import {
   runAgentTurnWithRetry
 } from '@/lib/agent/orchestrator';
 import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
-import { getCachedAgentReply } from '@/lib/agent/warmup-cache';
 
 interface HumanMoveBody {
   participantId?: string;
@@ -136,20 +135,6 @@ export async function POST(
     const rawTurns = [];
 
     for (const participant of selectedAgent) {
-      const questionKey = body.questionKey?.trim() || serverQuestionKey;
-      if (participant.userId && questionKey) {
-        const cached = await getCachedAgentReply(participant.userId, questionKey);
-        if (cached?.replyText) {
-          rawTurns.push({
-            participantId: participant.id,
-            guessWord: cached.replyText,
-            usedFallback: false,
-            attempts: 1
-          });
-          continue;
-        }
-      }
-
       const turn = await runAgentTurnWithRetry(
         participant.id,
         {
