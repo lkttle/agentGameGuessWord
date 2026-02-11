@@ -148,6 +148,11 @@ function getAvatarGradient(index: number): string {
 const ttsQueue: Array<() => Promise<boolean>> = [];
 let ttsProcessing = false;
 const MAX_TTS_ATTEMPTS = 3;
+const AGENT_REPLY_GAP_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function drainTtsQueue() {
   if (ttsProcessing) return;
@@ -161,7 +166,10 @@ async function drainTtsQueue() {
   ttsProcessing = false;
 }
 
-async function playTTS(text: string, userId?: string | null): Promise<boolean> {
+async function playTTS(
+  text: string,
+  options?: { userId?: string | null; participantId?: string }
+): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     ttsQueue.push(async () => {
       let settled = false;
@@ -175,7 +183,8 @@ async function playTTS(text: string, userId?: string | null): Promise<boolean> {
 
       try {
         const body: Record<string, string> = { text, emotion: 'happy' };
-        if (userId) body.userId = userId;
+        if (options?.userId) body.userId = options.userId;
+        if (options?.participantId) body.participantId = options.participantId;
 
         const res = await fetch('/api/secondme/tts', {
           method: 'POST',
@@ -221,6 +230,20 @@ async function playTTS(text: string, userId?: string | null): Promise<boolean> {
 
     void drainTtsQueue();
   });
+}
+
+async function playTTSWithRetry(
+  text: string,
+  options?: { userId?: string | null; participantId?: string }
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= MAX_TTS_ATTEMPTS; attempt += 1) {
+    const success = await playTTS(text, options);
+    if (success) return true;
+    if (attempt < MAX_TTS_ATTEMPTS) {
+      await sleep(400);
+    }
+  }
+  return false;
 }
 
 /* ----------------------------------------------------------------
@@ -327,8 +350,42 @@ export default function RoomPage() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const autoFinishRef = useRef(false);
   const turnSkippingRef = useRef(false);
-  const ttsPlayedRef = useRef(new Set<string>());
-  const ttsPendingRef = useRef(new Set<string>());
+  const revealedAgentLogIdsRef = useRef(new Set<string>());
+  const knownLogIdsRef = useRef(new Set<string>());
+  const revealQueueRef = useRef<Array<{
+    id: string;
+    text: string;
+    userId?: string | null;
+    participantId?: string;
+  }>>([]);
+  const revealProcessingRef = useRef(false);
+  const revealInitializedRef = useRef(false);
+  const [revealedAgentLogIds, setRevealedAgentLogIds] = useState<string[]>([]);
+
+  const revealAgentLog = useCallback((logId: string) => {
+    if (revealedAgentLogIdsRef.current.has(logId)) return;
+    revealedAgentLogIdsRef.current.add(logId);
+    setRevealedAgentLogIds((prev) => (prev.includes(logId) ? prev : [...prev, logId]));
+  }, []);
+
+  const processRevealQueue = useCallback(async () => {
+    if (revealProcessingRef.current) return;
+    revealProcessingRef.current = true;
+
+    while (revealQueueRef.current.length > 0) {
+      const next = revealQueueRef.current.shift();
+      if (!next) continue;
+
+      revealAgentLog(next.id);
+      await playTTSWithRetry(next.text, {
+        userId: next.userId,
+        participantId: next.participantId
+      });
+      await sleep(AGENT_REPLY_GAP_MS);
+    }
+
+    revealProcessingRef.current = false;
+  }, [revealAgentLog]);
 
   // Compute scores from round logs
   const scores = new Map<string, number>();
@@ -479,37 +536,61 @@ export default function RoomPage() {
   // Auto-scroll chat log
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [roomState?.room.match?.roundLogs?.length]);
+  }, [roomState?.room.match?.roundLogs?.length, revealedAgentLogIds.length]);
 
-  // Auto-play TTS for new agent responses
+  // Reveal and auto-play new agent replies one by one
   useEffect(() => {
     if (!match?.roundLogs) return;
-    for (const log of match.roundLogs) {
-      const player = participants.find(p => p.id === log.actorId);
-      if (ttsPlayedRef.current.has(log.id)) continue;
-      if (ttsPendingRef.current.has(log.id)) continue;
-      if (player?.participantType === PARTICIPANT_TYPES.AGENT && log.guessWord) {
-        ttsPendingRef.current.add(log.id);
-        const text = log.guessWord;
-        const speakerUserId = player.ownerUserId ?? player.userId;
 
-        void (async () => {
-          let success = false;
-          for (let attempt = 1; attempt <= MAX_TTS_ATTEMPTS; attempt += 1) {
-            success = await playTTS(text, speakerUserId);
-            if (success) break;
-            if (attempt < MAX_TTS_ATTEMPTS) {
-              await new Promise((resolve) => setTimeout(resolve, 400));
-            }
-          }
-          if (success) {
-            ttsPlayedRef.current.add(log.id);
-          }
-          ttsPendingRef.current.delete(log.id);
-        })();
+    if (!revealInitializedRef.current) {
+      revealInitializedRef.current = true;
+
+      for (const log of match.roundLogs) {
+        knownLogIdsRef.current.add(log.id);
+        const player = participants.find((participant) => participant.id === log.actorId);
+        if (player?.participantType === PARTICIPANT_TYPES.AGENT) {
+          revealAgentLog(log.id);
+        }
       }
+      return;
     }
-  }, [match?.roundLogs, participants]);
+
+    const newLogs = [...match.roundLogs]
+      .reverse()
+      .filter((log) => !knownLogIdsRef.current.has(log.id));
+
+    for (const log of newLogs) {
+      knownLogIdsRef.current.add(log.id);
+      const player = participants.find(p => p.id === log.actorId);
+      if (player?.participantType !== PARTICIPANT_TYPES.AGENT) continue;
+
+      const text = log.guessWord?.trim() ?? '';
+      if (!text) {
+        revealAgentLog(log.id);
+        continue;
+      }
+
+      revealQueueRef.current.push({
+        id: log.id,
+        text,
+        userId: player.ownerUserId ?? player.userId,
+        participantId: player.id
+      });
+    }
+
+    if (revealQueueRef.current.length > 0) {
+      void processRevealQueue();
+    }
+  }, [match?.roundLogs, participants, processRevealQueue, revealAgentLog]);
+
+  useEffect(() => {
+    revealedAgentLogIdsRef.current.clear();
+    knownLogIdsRef.current.clear();
+    revealQueueRef.current = [];
+    revealProcessingRef.current = false;
+    revealInitializedRef.current = false;
+    setRevealedAgentLogIds([]);
+  }, [match?.id]);
 
   // Auto-run agent rounds in AGENT_VS_AGENT mode
   const autoAgentRunningRef = useRef(false);
@@ -697,6 +778,7 @@ export default function RoomPage() {
 
   const showHint = failedRounds >= 2 && currentQuestion;
   const timerUrgent = timeLeft !== null && timeLeft <= 30;
+  const revealedAgentLogSet = new Set(revealedAgentLogIds);
 
   return (
     <div className="chatroom">
@@ -783,6 +865,9 @@ export default function RoomPage() {
                 const player = participants.find(p => p.id === log.actorId);
                 const isMe = player?.userId === session?.user?.id;
                 const isAgent = player?.participantType === PARTICIPANT_TYPES.AGENT;
+                if (isAgent && !revealedAgentLogSet.has(log.id)) {
+                  return null;
+                }
                 return (
                   <div
                     key={log.id}
@@ -795,7 +880,12 @@ export default function RoomPage() {
                         <span className="chat-bubble__round">R{log.roundIndex}</span>
                         {isAgent && (
                           <span className="chat-bubble__tts-icon" title="语音播放" onClick={() => {
-                            if (log.guessWord) void playTTS(log.guessWord, player?.ownerUserId ?? player?.userId);
+                            if (log.guessWord) {
+                              void playTTSWithRetry(log.guessWord, {
+                                userId: player?.ownerUserId ?? player?.userId,
+                                participantId: player?.id
+                              });
+                            }
                           }}>
                             &#9835;
                           </span>

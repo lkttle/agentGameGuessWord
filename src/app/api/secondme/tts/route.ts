@@ -7,6 +7,7 @@ interface TTSRequestBody {
   text?: string;
   emotion?: string;
   userId?: string;
+  participantId?: string;
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -21,8 +22,19 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'text is required' }, { status: 400 });
   }
 
-  // Use the specified userId or the current user
-  const targetUserId = body.userId || currentUser.id;
+  // Prefer participant owner token (agent voice), then explicit userId, then current user
+  let targetUserId = body.userId || currentUser.id;
+
+  if (body.participantId) {
+    const participant = await prisma.participant.findUnique({
+      where: { id: body.participantId },
+      select: { userId: true }
+    });
+
+    if (participant?.userId) {
+      targetUserId = participant.userId;
+    }
+  }
   const user = await prisma.user.findUnique({
     where: { id: targetUserId },
     select: { accessToken: true, refreshToken: true, tokenExpiresAt: true }
