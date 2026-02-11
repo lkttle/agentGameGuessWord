@@ -2196,6 +2196,73 @@ h1, h2, h3, h4, h5, h6 {
   margin-top: 2px;
 }
 
+/* Player card latest answer */
+.player-card__answer {
+  font-size: 0.82rem;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 1.6em;
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.player-card__answer--empty {
+  border-style: dashed;
+  opacity: 0.4;
+}
+
+.player-card__answer--correct {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: var(--color-success);
+}
+
+.player-card__answer--wrong {
+  background: rgba(239, 68, 68, 0.06);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.player-card__answer-word {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.player-card__answer--correct .player-card__answer-word {
+  color: var(--color-success);
+}
+
+.player-card__answer-result {
+  font-weight: 700;
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.player-card__answer--correct .player-card__answer-result {
+  color: var(--color-success);
+}
+
+.player-card__answer-tts {
+  cursor: pointer;
+  font-size: 0.82rem;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.player-card__answer-tts:hover {
+  opacity: 1;
+}
+
 /* Hint Display */
 .chatroom__hint {
   text-align: center;

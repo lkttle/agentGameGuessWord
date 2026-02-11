@@ -538,14 +538,17 @@ async function playTTSWithRetry(
 /* ----------------------------------------------------------------
    Player Card Component - Social profile card with selfIntroduction
    ---------------------------------------------------------------- */
-function PlayerCard({ participant, score, rank }: {
+function PlayerCard({ participant, score, rank, latestAnswer, onTtsPlay }: {
   participant: Participant;
   score: number;
   rank: number;
+  latestAnswer?: { guessWord: string; isCorrect: boolean; roundIndex: number } | null;
+  onTtsPlay?: () => void;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
   const initial = participant.displayName.charAt(0).toUpperCase();
   const isHuman = participant.participantType === PARTICIPANT_TYPES.HUMAN;
+  const isAgent = participant.participantType === PARTICIPANT_TYPES.AGENT;
   const label = isHuman ? '玩家' : (participant.agentSource === 'SELF' ? '我的Agent' : 'Agent');
   const hasAvatar = Boolean(participant.avatarUrl) && !imgFailed;
 
@@ -583,35 +586,22 @@ function PlayerCard({ participant, score, rank }: {
         {participant.selfIntroduction && (
           <div className="player-card__intro">{participant.selfIntroduction}</div>
         )}
+        {latestAnswer ? (
+          <div className={`player-card__answer ${latestAnswer.isCorrect ? 'player-card__answer--correct' : 'player-card__answer--wrong'}`}>
+            <span className="player-card__answer-word">{latestAnswer.guessWord}</span>
+            <span className="player-card__answer-result">
+              {latestAnswer.isCorrect ? '+1' : '未中'}
+            </span>
+            {isAgent && onTtsPlay && (
+              <span className="player-card__answer-tts" title="语音播放" onClick={onTtsPlay}>
+                &#9835;
+              </span>
+            )}
+          </div>
+        ) : (
+          <div className="player-card__answer player-card__answer--empty" />
+        )}
       </div>
-    </div>
-  );
-}
-
-/* ----------------------------------------------------------------
-   Mini Avatar for chat bubbles
-   ---------------------------------------------------------------- */
-function MiniAvatar({ participant }: { participant: Participant }) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const initial = participant.displayName.charAt(0).toUpperCase();
-  const hasAvatar = Boolean(participant.avatarUrl) && !imgFailed;
-
-  return (
-    <div
-      className="chat-bubble__mini-avatar"
-      style={hasAvatar ? undefined : { background: getAvatarGradient(participant.seatOrder - 1) }}
-    >
-      {hasAvatar ? (
-        <img
-          src={participant.avatarUrl!}
-          alt=""
-          className="chat-bubble__mini-avatar-img"
-          referrerPolicy="no-referrer"
-          onError={() => setImgFailed(true)}
-        />
-      ) : (
-        <span className="chat-bubble__mini-avatar-text">{initial}</span>
-      )}
     </div>
   );
 }
@@ -1254,6 +1244,21 @@ export default function RoomPage() {
   const timerUrgent = timeLeft !== null && timeLeft <= 30;
   const revealedAgentLogSet = new Set(revealedAgentLogIds);
 
+  // Compute latest answer per participant for player cards
+  const latestAnswers = new Map<string, { guessWord: string; isCorrect: boolean; roundIndex: number }>();
+  if (match?.roundLogs) {
+    for (const log of match.roundLogs) {
+      const player = participants.find(p => p.id === log.actorId);
+      const isAgent = player?.participantType === PARTICIPANT_TYPES.AGENT;
+      if (isAgent && !revealedAgentLogSet.has(log.id)) continue;
+      latestAnswers.set(log.actorId, {
+        guessWord: log.guessWord,
+        isCorrect: log.isCorrect,
+        roundIndex: log.roundIndex,
+      });
+    }
+  }
+
   return (
     <div className="chatroom">
       <div className="chatroom__container">
@@ -1293,6 +1298,17 @@ export default function RoomPage() {
               participant={p}
               score={scores.get(p.id) ?? 0}
               rank={idx + 1}
+              latestAnswer={latestAnswers.get(p.id) ?? null}
+              onTtsPlay={p.participantType === PARTICIPANT_TYPES.AGENT ? () => {
+                const answer = latestAnswers.get(p.id);
+                if (answer?.guessWord) {
+                  void unlockAudioPlayback('manual_tts_click');
+                  void playTTSWithRetry(answer.guessWord, {
+                    userId: p.ownerUserId ?? p.userId,
+                    participantId: p.id
+                  });
+                }
+              } : undefined}
             />
           ))}
         </div>
@@ -1323,7 +1339,7 @@ export default function RoomPage() {
           </div>
         )}
 
-        {/* Chat Messages Area - Left/Right Layout */}
+        {/* Messages Area - System messages & Finish card */}
         <div className="chatroom__messages">
           {error && <div className="alert alert--error mb-md">{error}</div>}
           {(busy || isSubmitting) && (
@@ -1336,53 +1352,6 @@ export default function RoomPage() {
             <div className="chatroom__system-msg">
               房间已创建，等待开始...共 {participants.length} 名参与者
             </div>
-          )}
-
-          {match?.roundLogs && match.roundLogs.length > 0 && (
-            <>
-              {match.roundLogs.map((log) => {
-                const player = participants.find(p => p.id === log.actorId);
-                const isMe = player?.userId === session?.user?.id;
-                const isAgent = player?.participantType === PARTICIPANT_TYPES.AGENT;
-                if (isAgent && !revealedAgentLogSet.has(log.id)) {
-                  return null;
-                }
-                return (
-                  <div
-                    key={log.id}
-                    className={`chat-bubble ${isMe ? 'chat-bubble--me' : 'chat-bubble--other'}`}
-                  >
-                    {!isMe && player && <MiniAvatar participant={player} />}
-                    <div className="chat-bubble__body">
-                      <div className="chat-bubble__sender">
-                        {player?.displayName ?? '?'}
-                        <span className="chat-bubble__round">R{log.roundIndex}</span>
-                        {isAgent && (
-                          <span className="chat-bubble__tts-icon" title="语音播放" onClick={() => {
-            if (log.guessWord) {
-                              void unlockAudioPlayback('manual_tts_click');
-                              void playTTSWithRetry(log.guessWord, {
-                                userId: player?.ownerUserId ?? player?.userId,
-                                participantId: player?.id
-                              });
-                            }
-                          }}>
-                            &#9835;
-                          </span>
-                        )}
-                      </div>
-                      <div className="chat-bubble__content">
-                        <span className="chat-bubble__word">{log.guessWord}</span>
-                        <span className={`chat-bubble__result ${log.isCorrect ? 'chat-bubble__result--correct' : 'chat-bubble__result--wrong'}`}>
-                          {log.isCorrect ? '+1' : '未中'}
-                        </span>
-                      </div>
-                    </div>
-                    {isMe && player && <MiniAvatar participant={player} />}
-                  </div>
-                );
-              })}
-            </>
           )}
 
           {room?.status === 'FINISHED' && (
