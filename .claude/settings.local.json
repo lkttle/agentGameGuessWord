@@ -18,7 +18,11 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:develop-docs.second.me)",
       "Bash(npx prisma db push:*)",
-      "Bash(git remote add:*)"
+      "Bash(git remote add:*)",
+      "Bash(while read commit msg)",
+      "Bash(do echo \"=== $commit: $msg ===\")",
+      "Bash(done)",
+      "Bash(DATABASE_URL=\"postgresql://root:7xq3gwKR4n2fFtijQEy69TWa0deZ518N@hkg1.clusters.zeabur.com:31751/zeabur\" npx prisma migrate deploy:*)"
     ]
   }
 }
