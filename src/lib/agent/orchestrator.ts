@@ -21,18 +21,13 @@ export interface AgentTurnClient {
 }
 
 export class FallbackAgentTurnClient implements AgentTurnClient {
-  async generateGuess(_agentId: string, context: AgentTurnContext): Promise<string> {
-    const firstLetter = context.hint?.[0] ?? 'a';
-    return `${firstLetter}gent`;
+  async generateGuess(_agentId: string, _context: AgentTurnContext): Promise<string> {
+    return '';
   }
 }
 
-function normalizeGuess(raw: string, hint: string): string {
-  const trimmed = raw.trim().toLowerCase();
-  if (trimmed.length === 0) {
-    return `${hint?.[0] ?? 'a'}gent`;
-  }
-  return trimmed;
+function normalizeGuess(raw: string): string {
+  return raw.trim();
 }
 
 export async function runAgentTurnWithRetry(
@@ -47,7 +42,7 @@ export async function runAgentTurnWithRetry(
 ): Promise<AgentTurnResult> {
   const timeoutMs = options?.timeoutMs ?? 4000;
   const maxRetries = options?.maxRetries ?? 2;
-  const fallbackGuess = options?.fallbackGuess ?? `${context.hint?.[0] ?? 'a'}gent`;
+  const fallbackGuess = options?.fallbackGuess ?? '';
 
   let attempts = 0;
   while (attempts <= maxRetries) {
@@ -64,21 +59,21 @@ export async function runAgentTurnWithRetry(
 
       if (execution.timedOut) {
         return {
-          guessWord: normalizeGuess(execution.value, context.hint),
+          guessWord: normalizeGuess(execution.value),
           usedFallback: true,
           attempts
         };
       }
 
       return {
-        guessWord: normalizeGuess(execution.value, context.hint),
+        guessWord: normalizeGuess(execution.value),
         usedFallback: false,
         attempts
       };
     } catch {
       if (attempts > maxRetries) {
         return {
-          guessWord: normalizeGuess(fallbackGuess, context.hint),
+          guessWord: normalizeGuess(fallbackGuess),
           usedFallback: true,
           attempts
         };
@@ -87,7 +82,7 @@ export async function runAgentTurnWithRetry(
   }
 
   return {
-    guessWord: normalizeGuess(fallbackGuess, context.hint),
+    guessWord: normalizeGuess(fallbackGuess),
     usedFallback: true,
     attempts
   };

@@ -1,6 +1,5 @@
 import { prisma } from '@/lib/db';
 import { secondMeSdk } from '@/lib/secondme/sdk';
-import { extractGuessWord } from '@/lib/game/guess-word-engine';
 import type { AgentTurnClient, AgentTurnContext } from './orchestrator';
 
 /**
@@ -86,12 +85,7 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
       ? context.pinyinHint.toUpperCase()
       : context.hint.replace(/_/g, '').toUpperCase();
 
-    // Expected word length: use pinyinHint length if available, otherwise hint length
-    const expectedLength = context.pinyinHint
-      ? context.pinyinHint.length
-      : pinyinInitials.length;
-
-    const prompt = `我想和你玩一个游戏，我说词语的拼音首字母，你来猜对应的中文词语。比如我说"PY"，你可以猜"朋友"；我说"CF"，你可以猜"吃饭"。注意：你猜的词语字数必须和拼音字母数一致。现在游戏开始，"${pinyinInitials}"，请直接回复你猜的${expectedLength}个字的中文词语，不要加任何解释。`;
+    const prompt = `我想和你玩一个游戏，我说词语的拼音首字母，你来猜对应的中文词语。比如我说"PY"，你可以猜"朋友"；我说"CF"，你可以猜"吃饭"。现在游戏开始，"${pinyinInitials}"，请直接给出你的猜测。`;
 
     // Get existing session ID for continuity
     let sessionId: string | undefined;
@@ -110,9 +104,6 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
       await this.saveSessionId(participant.userId, result.sessionId);
     }
 
-    // Extract the guessed word from the response
-    const extracted = extractGuessWord(result.content, expectedLength);
-
-    return extracted || result.content.trim();
+    return result.content.trim();
   }
 }

@@ -145,8 +145,9 @@ function getAvatarGradient(index: number): string {
 /* ----------------------------------------------------------------
    TTS Helper - auto-play agent responses
    ---------------------------------------------------------------- */
-const ttsQueue: Array<() => Promise<void>> = [];
+const ttsQueue: Array<() => Promise<boolean>> = [];
 let ttsProcessing = false;
+const MAX_TTS_ATTEMPTS = 3;
 
 async function drainTtsQueue() {
   if (ttsProcessing) return;
@@ -160,42 +161,66 @@ async function drainTtsQueue() {
   ttsProcessing = false;
 }
 
-async function playTTS(text: string, userId?: string | null) {
-  ttsQueue.push(async () => {
-    try {
-      const body: Record<string, string> = { text, emotion: 'happy' };
-      if (userId) body.userId = userId;
-      const res = await fetch('/api/secondme/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        cache: 'no-store'
-      });
-      if (!res.ok) return;
-      const json = await res.json();
-      const url = json?.data?.url;
-      if (!url) return;
-      const audio = new Audio(url);
-      audio.volume = 0.7;
-      await new Promise<void>((resolve) => {
-        audio.onended = () => resolve();
-        audio.onerror = () => resolve();
-        // Set a max wait of 10s so queue doesn't stall
-        const fallbackTimer = setTimeout(() => resolve(), 10000);
-        audio.play().then(() => {
-          // playing successfully
-        }).catch(() => {
-          clearTimeout(fallbackTimer);
-          resolve();
+async function playTTS(text: string, userId?: string | null): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    ttsQueue.push(async () => {
+      let settled = false;
+      const settle = (value: boolean): boolean => {
+        if (!settled) {
+          settled = true;
+          resolve(value);
+        }
+        return value;
+      };
+
+      try {
+        const body: Record<string, string> = { text, emotion: 'happy' };
+        if (userId) body.userId = userId;
+
+        const res = await fetch('/api/secondme/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          cache: 'no-store'
         });
-        audio.onended = () => { clearTimeout(fallbackTimer); resolve(); };
-        audio.onerror = () => { clearTimeout(fallbackTimer); resolve(); };
-      });
-    } catch {
-      // TTS is best-effort
-    }
+
+        if (!res.ok) {
+          return settle(false);
+        }
+
+        const json = await res.json();
+        const url = json?.data?.url;
+        if (!url) {
+          return settle(false);
+        }
+
+        const audio = new Audio(url);
+        audio.volume = 0.7;
+
+        const played = await new Promise<boolean>((audioResolve) => {
+          const fallbackTimer = setTimeout(() => audioResolve(false), 10000);
+          audio.onended = () => {
+            clearTimeout(fallbackTimer);
+            audioResolve(true);
+          };
+          audio.onerror = () => {
+            clearTimeout(fallbackTimer);
+            audioResolve(false);
+          };
+          audio.play().catch(() => {
+            clearTimeout(fallbackTimer);
+            audioResolve(false);
+          });
+        });
+
+        return settle(played);
+      } catch {
+        return settle(false);
+      }
+    });
+
+    void drainTtsQueue();
   });
-  void drainTtsQueue();
 }
 
 /* ----------------------------------------------------------------
@@ -303,6 +328,7 @@ export default function RoomPage() {
   const autoFinishRef = useRef(false);
   const turnSkippingRef = useRef(false);
   const ttsPlayedRef = useRef(new Set<string>());
+  const ttsPendingRef = useRef(new Set<string>());
 
   // Compute scores from round logs
   const scores = new Map<string, number>();
@@ -461,9 +487,26 @@ export default function RoomPage() {
     for (const log of match.roundLogs) {
       const player = participants.find(p => p.id === log.actorId);
       if (ttsPlayedRef.current.has(log.id)) continue;
+      if (ttsPendingRef.current.has(log.id)) continue;
       if (player?.participantType === PARTICIPANT_TYPES.AGENT && log.guessWord) {
-        ttsPlayedRef.current.add(log.id);
-        void playTTS(log.guessWord, player.ownerUserId ?? player.userId);
+        ttsPendingRef.current.add(log.id);
+        const text = log.guessWord;
+        const speakerUserId = player.ownerUserId ?? player.userId;
+
+        void (async () => {
+          let success = false;
+          for (let attempt = 1; attempt <= MAX_TTS_ATTEMPTS; attempt += 1) {
+            success = await playTTS(text, speakerUserId);
+            if (success) break;
+            if (attempt < MAX_TTS_ATTEMPTS) {
+              await new Promise((resolve) => setTimeout(resolve, 400));
+            }
+          }
+          if (success) {
+            ttsPlayedRef.current.add(log.id);
+          }
+          ttsPendingRef.current.delete(log.id);
+        })();
       }
     }
   }, [match?.roundLogs, participants]);

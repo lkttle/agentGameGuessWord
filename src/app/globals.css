@@ -2388,7 +2388,8 @@ h1, h2, h3, h4, h5, h6 {
 
 .chat-bubble__content {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: var(--space-sm);
 }
 
@@ -2396,6 +2397,11 @@ h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-mono);
   font-size: 1rem;
   font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  flex: 1 1 100%;
+  min-width: 0;
 }
 
 .chat-bubble__result {

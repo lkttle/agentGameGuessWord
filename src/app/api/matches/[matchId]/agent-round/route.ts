@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth/current-user';
 import {
   buildInitialLetterHint,
   evaluateAgentGuess,
+  extractGuessWord,
   timeoutRoundResult
 } from '@/lib/game/guess-word-engine';
 import {
@@ -63,6 +64,7 @@ export async function POST(
 
   const roundIndex = body.roundIndex ?? match.totalRounds + 1;
   const hint = buildInitialLetterHint(targetWord);
+  const expectedLength = body.pinyinHint?.length ?? targetWord.length;
 
   // Try SecondMe agent client first, fall back to dummy client
   let client;
@@ -93,18 +95,20 @@ export async function POST(
 
   for (let index = 0; index < rawTurns.length; index += 1) {
     const turn = rawTurns[index];
+    const rawResponse = turn.guessWord?.trim() ?? '';
+    const extractedWord = extractGuessWord(rawResponse, expectedLength);
     const result = turn.usedFallback
       ? timeoutRoundResult(targetWord)
       : evaluateAgentGuess({
           targetWord,
-          rawResponse: turn.guessWord,
-          extractedWord: turn.guessWord,
+          rawResponse,
+          extractedWord,
           attemptIndex: index + 1
         });
 
     turns.push({
       participantId: turn.participantId ?? '',
-      guessWord: turn.guessWord,
+      guessWord: rawResponse,
       usedFallback: turn.usedFallback,
       attempts: turn.attempts,
       ...result

@@ -2,7 +2,12 @@ import { MatchStatus, ParticipantType } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
-import { evaluateRound, evaluateAgentGuess, timeoutRoundResult } from '@/lib/game/guess-word-engine';
+import {
+  evaluateRound,
+  evaluateAgentGuess,
+  extractGuessWord,
+  timeoutRoundResult
+} from '@/lib/game/guess-word-engine';
 import {
   FallbackAgentTurnClient,
   runAgentTurnsWithRetry
@@ -78,6 +83,7 @@ export async function POST(
 
   const roundIndex = body.roundIndex ?? match.totalRounds + 1;
   const humanResult = evaluateRound({ targetWord, guessWord, attemptIndex: 1 });
+  const expectedLength = body.pinyinHint?.length ?? targetWord.length;
 
   const agentTurns: Array<{
     participantId: string;
@@ -117,18 +123,20 @@ export async function POST(
 
     for (let index = 0; index < rawTurns.length; index += 1) {
       const turn = rawTurns[index];
+      const rawResponse = turn.guessWord?.trim() ?? '';
+      const extractedWord = extractGuessWord(rawResponse, expectedLength);
       const result = turn.usedFallback
         ? timeoutRoundResult(targetWord)
         : evaluateAgentGuess({
             targetWord,
-            rawResponse: turn.guessWord,
-            extractedWord: turn.guessWord,
+            rawResponse,
+            extractedWord,
             attemptIndex: index + 2
           });
 
       agentTurns.push({
         participantId: turn.participantId ?? '',
-        guessWord: turn.guessWord,
+        guessWord: rawResponse,
         usedFallback: turn.usedFallback,
         result
       });
