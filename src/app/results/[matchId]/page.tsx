@@ -6,8 +6,12 @@ interface MatchResultPageProps {
 
 interface ParticipantResult {
   participantId: string;
+  userId?: string | null;
   displayName: string;
   participantType: string;
+  seatOrder?: number;
+  ownerUserId?: string | null;
+  agentSource?: 'SELF' | 'PLATFORM' | null;
   score: number;
   correctCount: number;
 }
@@ -140,6 +144,7 @@ export default async function MatchResultPage({ params }: MatchResultPageProps) 
                   <td>
                     <span className={`participants-table__type participants-table__type--${p.participantType.toLowerCase()}`}>
                       {p.participantType}
+                      {p.participantType === 'AGENT' && p.agentSource ? ` (${p.agentSource})` : ''}
                     </span>
                   </td>
                   <td className="participants-table__score">{p.score}</td>

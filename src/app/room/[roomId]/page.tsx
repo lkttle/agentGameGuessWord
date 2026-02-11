@@ -19,6 +19,9 @@ interface Participant {
   participantType: ParticipantType;
   displayName: string;
   seatOrder: number;
+  ownerUserId?: string | null;
+  agentSource?: 'SELF' | 'PLATFORM' | null;
+  status?: 'ACTIVE';
   score?: number;
 }
 
@@ -110,6 +113,11 @@ function PlayerCard({ participant, isHost, scores }: {
   const score = scores.get(participant.id) ?? 0;
   const avatarClass = participant.participantType === PARTICIPANT_TYPES.HUMAN
     ? 'player-card__avatar--human' : 'player-card__avatar--agent';
+  const agentBadge = participant.participantType === PARTICIPANT_TYPES.AGENT
+    ? participant.agentSource === 'SELF'
+      ? 'SELF'
+      : 'PLATFORM'
+    : null;
 
   return (
     <div className="player-card">
@@ -118,6 +126,11 @@ function PlayerCard({ participant, isHost, scores }: {
         <div className="player-card__name">
           {participant.displayName}
           {isHost && <span style={{ fontSize: '0.75rem', color: 'var(--color-accent)', marginLeft: '6px' }}>HOST</span>}
+          {agentBadge && (
+            <span style={{ fontSize: '0.72rem', color: 'var(--color-primary)', marginLeft: '6px' }}>
+              {agentBadge}
+            </span>
+          )}
         </div>
         <div className="player-card__type">{participant.participantType}</div>
       </div>
@@ -154,7 +167,7 @@ export default function RoomPage() {
   const participants = room?.participants ?? [];
 
   const humanParticipant = participants.find(p => p.participantType === PARTICIPANT_TYPES.HUMAN);
-  const agentParticipant = participants.find(p => p.participantType === PARTICIPANT_TYPES.AGENT);
+  const agentParticipants = participants.filter(p => p.participantType === PARTICIPANT_TYPES.AGENT);
 
   // Generate hint from target word
   const hint = targetWord
@@ -226,7 +239,8 @@ export default function RoomPage() {
         method: 'POST',
         body: JSON.stringify({
           participantId: humanParticipant?.id,
-          agentParticipantId: agentParticipant?.id,
+          agentParticipantId: agentParticipants[0]?.id,
+          autoAgentResponse: true,
           targetWord,
           guessWord: guessWord.trim()
         })
@@ -269,9 +283,9 @@ export default function RoomPage() {
       <div className="room-header">
         <div className="room-header__inner">
           <div className="room-header__info">
-            <span className="room-header__mode">
-              {room?.mode === GAME_MODES.AGENT_VS_AGENT ? 'Agent vs Agent' : 'Human vs Agent'}
-            </span>
+              <span className="room-header__mode">
+              {room?.mode === GAME_MODES.AGENT_VS_AGENT ? 'Multi-Agent Battle' : 'Human vs Agent'}
+              </span>
             <h1 className="room-header__title">Game Room</h1>
             <span className="room-header__id">Room: {roomId}</span>
           </div>
@@ -297,7 +311,7 @@ export default function RoomPage() {
             <div>
               <h2 className="waiting-state__title">Waiting for Players</h2>
               <p className="waiting-state__desc">
-                Share the Room ID with other players to join. At least 2 players needed to start.
+                Fast room created. Share room ID only if you want extra participants.
               </p>
             </div>
 
@@ -394,7 +408,7 @@ export default function RoomPage() {
                       onClick={() => void handleAgentRound()}
                       disabled={!!busy}
                     >
-                      Run Agent Round
+                      Run Multi-Agent Round
                     </button>
                   ) : (
                     <div style={{ display: 'grid', gap: 'var(--space-sm)' }}>

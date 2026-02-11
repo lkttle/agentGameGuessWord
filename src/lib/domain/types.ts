@@ -5,6 +5,15 @@ export const GAME_MODES = {
 
 export type GameMode = (typeof GAME_MODES)[keyof typeof GAME_MODES];
 
+export const PLAY_ENTRY_MODES = {
+  PLAYER_VS_PLATFORM_AGENT: 'PLAYER_VS_PLATFORM_AGENT',
+  PLAYER_VS_SELF_AGENT: 'PLAYER_VS_SELF_AGENT',
+  FAST_AGENT_ARENA: 'FAST_AGENT_ARENA',
+  MULTI_AGENT_BATTLE: 'MULTI_AGENT_BATTLE'
+} as const;
+
+export type PlayEntryMode = (typeof PLAY_ENTRY_MODES)[keyof typeof PLAY_ENTRY_MODES];
+
 export const ROOM_STATUSES = {
   WAITING: 'WAITING',
   RUNNING: 'RUNNING',
@@ -26,6 +35,13 @@ export const PARTICIPANT_TYPES = {
 } as const;
 
 export type ParticipantType = (typeof PARTICIPANT_TYPES)[keyof typeof PARTICIPANT_TYPES];
+
+export const AGENT_SOURCES = {
+  SELF: 'SELF',
+  PLATFORM: 'PLATFORM'
+} as const;
+
+export type AgentSource = (typeof AGENT_SOURCES)[keyof typeof AGENT_SOURCES];
 
 export const LEADERBOARD_PERIODS = {
   DAILY: 'DAILY',

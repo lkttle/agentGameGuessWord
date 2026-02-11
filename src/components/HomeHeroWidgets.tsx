@@ -137,7 +137,7 @@ export function HomePrimaryActionButton() {
   const label = loading
     ? '登录状态检查中...'
     : authenticated
-      ? '已登录，开始对战'
+      ? '已登录，快速开战'
       : '使用 SecondMe 登录并开始';
   const className = authenticated ? 'btn btn--primary btn--lg' : 'btn btn--gradient btn--lg';
 

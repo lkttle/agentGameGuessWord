@@ -2,7 +2,7 @@ import { MatchStatus, MetricEventType, RoomStatus } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
-import { assertRoomTransition } from '@/lib/room/room-state';
+import { assertRoomTransition, validateRoomParticipants } from '@/lib/room/room-state';
 import { recordMetricEvent } from '@/lib/metrics/service';
 
 export async function POST(
@@ -26,8 +26,14 @@ export async function POST(
   if (room.hostUserId !== user.id) {
     return NextResponse.json({ error: 'Only host can start room' }, { status: 403 });
   }
-  if (room.participants.length < 2) {
-    return NextResponse.json({ error: 'At least two participants required' }, { status: 400 });
+
+  const participantValidationError = validateRoomParticipants(
+    room.participants,
+    4,
+    room.mode === 'HUMAN_VS_AGENT'
+  );
+  if (participantValidationError) {
+    return NextResponse.json({ error: participantValidationError }, { status: 400 });
   }
 
   try {
@@ -56,7 +62,11 @@ export async function POST(
   await recordMetricEvent(MetricEventType.MATCH_START, {
     userId: user.id,
     roomId: room.id,
-    matchId: result.match.id
+    matchId: result.match.id,
+    payload: {
+      mode: room.mode,
+      participantCount: room.participants.length
+    }
   });
 
   return NextResponse.json({ room: result.updatedRoom, match: result.match });

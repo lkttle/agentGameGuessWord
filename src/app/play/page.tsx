@@ -1,8 +1,79 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
-import { GAME_MODES, PARTICIPANT_TYPES, type GameMode, type ParticipantType } from '@/lib/domain/types';
+import { Suspense, useMemo, useState } from 'react';
+import {
+  GAME_MODES,
+  PLAY_ENTRY_MODES,
+  type GameMode,
+  type PlayEntryMode
+} from '@/lib/domain/types';
+
+interface SessionUser {
+  id: string;
+  secondmeUserId?: string | null;
+  name?: string | null;
+}
+
+interface SessionResponse {
+  authenticated: boolean;
+  user?: SessionUser;
+}
+
+interface CreateRoomResponse {
+  room: { id: string };
+}
+
+function buildFallbackCreatePayload(selected: ModeOption, alias?: string) {
+  return {
+    mode: selected.mode,
+    displayName: alias?.trim() || undefined
+  };
+}
+
+interface ModeOption {
+  key: PlayEntryMode;
+  title: string;
+  subtitle: string;
+  mode: GameMode;
+  autoJoinSelfAgent: boolean;
+  defaultParticipantCount: number;
+}
+
+const modeOptions: ModeOption[] = [
+  {
+    key: PLAY_ENTRY_MODES.PLAYER_VS_PLATFORM_AGENT,
+    title: '玩家 vs 平台 Agent',
+    subtitle: '最快上手，直接挑战平台 Agent',
+    mode: GAME_MODES.HUMAN_VS_AGENT,
+    autoJoinSelfAgent: false,
+    defaultParticipantCount: 2
+  },
+  {
+    key: PLAY_ENTRY_MODES.PLAYER_VS_SELF_AGENT,
+    title: '玩家 vs 我的 Agent',
+    subtitle: '登录即开战，和你的专属 Agent 对练',
+    mode: GAME_MODES.HUMAN_VS_AGENT,
+    autoJoinSelfAgent: true,
+    defaultParticipantCount: 2
+  },
+  {
+    key: PLAY_ENTRY_MODES.FAST_AGENT_ARENA,
+    title: '快节奏 Agent Arena',
+    subtitle: '你参战 + Agent 对局，短平快高频开局',
+    mode: GAME_MODES.AGENT_VS_AGENT,
+    autoJoinSelfAgent: true,
+    defaultParticipantCount: 3
+  },
+  {
+    key: PLAY_ENTRY_MODES.MULTI_AGENT_BATTLE,
+    title: '多 Agent 混战',
+    subtitle: '不局限 1v1，支持多 Agent 参战',
+    mode: GAME_MODES.AGENT_VS_AGENT,
+    autoJoinSelfAgent: true,
+    defaultParticipantCount: 4
+  }
+];
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -13,12 +84,17 @@ async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const text = await res.text();
   let data: unknown = null;
   if (text) {
-    try { data = JSON.parse(text); } catch { data = { error: text }; }
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text };
+    }
   }
   if (!res.ok) {
-    const msg = data && typeof data === 'object' && 'error' in data
-      ? String((data as { error: unknown }).error)
-      : `${res.status} ${res.statusText}`;
+    const msg =
+      data && typeof data === 'object' && 'error' in data
+        ? String((data as { error: unknown }).error)
+        : `${res.status} ${res.statusText}`;
     throw new Error(msg);
   }
   return data as T;
@@ -27,70 +103,74 @@ async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
 function PlayContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialMode = searchParams.get('mode') === 'HUMAN_VS_AGENT'
-    ? GAME_MODES.HUMAN_VS_AGENT
-    : GAME_MODES.AGENT_VS_AGENT;
 
-  const [mode, setMode] = useState<GameMode>(initialMode);
-  const [displayName, setDisplayName] = useState('');
-  const [joinRoomId, setJoinRoomId] = useState('');
-  const [joinName, setJoinName] = useState('');
-  const [joinType, setJoinType] = useState<ParticipantType>(PARTICIPANT_TYPES.AGENT);
+  const preferredMode = searchParams.get('mode');
+  const initialMode = preferredMode === 'HUMAN_VS_AGENT'
+    ? PLAY_ENTRY_MODES.PLAYER_VS_PLATFORM_AGENT
+    : PLAY_ENTRY_MODES.FAST_AGENT_ARENA;
 
+  const [selectedMode, setSelectedMode] = useState<PlayEntryMode>(initialMode);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [alias, setAlias] = useState('');
+  const [participantCount, setParticipantCount] = useState(3);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
 
-  async function ensureSession(): Promise<boolean> {
-    const session = await apiJson<{ authenticated: boolean }>('/api/auth/session').catch(() => ({ authenticated: false }));
+  const modeConfig = useMemo(
+    () => modeOptions.find((option) => option.key === selectedMode) ?? modeOptions[0],
+    [selectedMode]
+  );
+
+  async function ensureSession(): Promise<SessionResponse | null> {
+    const session = await apiJson<SessionResponse>('/api/auth/session').catch(
+      () => ({ authenticated: false })
+    );
     if (session.authenticated) {
-      return true;
+      return session;
     }
-    const returnTo = `/play?mode=${encodeURIComponent(mode)}`;
+    const returnTo = `/play?mode=${encodeURIComponent(modeConfig.mode)}`;
     window.location.href = `/api/auth/login?return_to=${encodeURIComponent(returnTo)}`;
-    return false;
+    return null;
   }
 
-  async function handleCreate() {
+  async function handleQuickStart() {
     try {
       setError('');
-      setBusy('正在创建房间...');
-      const ok = await ensureSession();
-      if (!ok) {
+      setBusy('正在为你极速开局...');
+      const session = await ensureSession();
+      if (!session) {
         return;
       }
-      const name = displayName.trim() || (mode === GAME_MODES.AGENT_VS_AGENT ? 'Agent Alpha' : 'Player');
-      const res = await apiJson<{ room: { id: string } }>('/api/rooms', {
-        method: 'POST',
-        body: JSON.stringify({ mode, displayName: name })
-      });
-      router.push(`/room/${res.room.id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '创建房间失败');
-    } finally {
-      setBusy('');
-    }
-  }
 
-  async function handleJoin() {
-    if (!joinRoomId.trim()) {
-      setError('请输入房间 ID');
-      return;
-    }
-    try {
-      setError('');
-      setBusy('正在加入房间...');
-      const ok = await ensureSession();
-      if (!ok) {
-        return;
+      const payload = {
+        mode: modeConfig.mode,
+        alias: alias.trim() || undefined,
+        autoJoinSelfAgent: modeConfig.autoJoinSelfAgent,
+        participantCount: showAdvanced
+          ? Math.max(2, Math.min(4, Math.floor(participantCount)))
+          : modeConfig.defaultParticipantCount
+      };
+
+      let createRes: CreateRoomResponse;
+      try {
+        createRes = await apiJson<CreateRoomResponse>('/api/rooms', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+      } catch (createError) {
+        if (!modeConfig.autoJoinSelfAgent) {
+          throw createError;
+        }
+        createRes = await apiJson<CreateRoomResponse>('/api/rooms', {
+          method: 'POST',
+          body: JSON.stringify(buildFallbackCreatePayload(modeConfig, alias))
+        });
       }
-      const name = joinName.trim() || 'Challenger';
-      await apiJson(`/api/rooms/${joinRoomId.trim()}/join`, {
-        method: 'POST',
-        body: JSON.stringify({ participantType: joinType, displayName: name })
-      });
-      router.push(`/room/${joinRoomId.trim()}`);
+
+      await apiJson(`/api/rooms/${createRes.room.id}/start`, { method: 'POST', body: '{}' });
+      router.push(`/room/${createRes.room.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加入房间失败');
+      setError(err instanceof Error ? err.message : '开局失败，请稍后重试');
     } finally {
       setBusy('');
     }
@@ -99,123 +179,95 @@ function PlayContent() {
   return (
     <div className="page-container">
       <div className="lobby-header">
-        <h1 className="section__title">对战大厅</h1>
-        <p className="section__desc">支持 Agent vs Agent 与 Human vs Agent 两种模式</p>
+        <h1 className="section__title">极速开战</h1>
+        <p className="section__desc">
+          年轻人短平快 Agent 游戏：选模式，点开战，立即进入房间。
+        </p>
       </div>
 
-      <div className="alert alert--info mb-md">
-        核心用户来自 SecondMe：开始对战前将通过 SecondMe OAuth2 登录。
-      </div>
+      <div className="alert alert--info mb-md">登录后默认使用账户身份，不再手动输入房间 ID 和显示名称。</div>
 
       {error && <div className="alert alert--error mb-md">{error}</div>}
       {busy && (
-        <div className="alert alert--info mb-md" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="alert alert--info mb-md" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="loading-spinner" />
           {busy}
         </div>
       )}
 
-      <div className="lobby-grid">
-        {/* Create Room */}
-        <div className="lobby-card animate-slide-up">
-          <h2 className="lobby-card__title">创建房间</h2>
-          <p className="lobby-card__desc">新建一局对战并邀请其他玩家加入。</p>
+      <div className="mode-grid">
+        {modeOptions.map((option) => (
+          <button
+            key={option.key}
+            type="button"
+            className="mode-card"
+            onClick={() => {
+              setSelectedMode(option.key);
+              setParticipantCount(option.defaultParticipantCount);
+            }}
+            style={{
+              textAlign: 'left',
+              borderColor: selectedMode === option.key ? 'var(--color-primary)' : undefined,
+              boxShadow: selectedMode === option.key ? 'var(--shadow-lg)' : undefined
+            }}
+          >
+            <div className="mode-card__title">{option.title}</div>
+            <div className="mode-card__desc">{option.subtitle}</div>
+          </button>
+        ))}
+      </div>
 
-          <div className="lobby-form">
-            <div className="form-group">
-              <label className="form-label" htmlFor="create-mode">对战模式</label>
-              <select
-                id="create-mode"
-                className="select"
-                value={mode}
-                onChange={(e) => setMode(e.target.value as GameMode)}
-              >
-                <option value={GAME_MODES.AGENT_VS_AGENT}>Agent vs Agent（核心）</option>
-                <option value={GAME_MODES.HUMAN_VS_AGENT}>Human vs Agent（挑战）</option>
-              </select>
-            </div>
+      <div className="lobby-card animate-slide-up" style={{ marginTop: 'var(--space-lg)' }}>
+        <h2 className="lobby-card__title">两步开局</h2>
+        <p className="lobby-card__desc">当前模式：{modeConfig.title}</p>
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="create-name">显示名称</label>
-              <input
-                id="create-name"
-                className="input"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder={mode === GAME_MODES.AGENT_VS_AGENT ? 'Agent Alpha' : '你的昵称'}
-              />
-            </div>
+        <div className="lobby-form">
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setShowAdvanced((value) => !value)}
+            style={{ justifySelf: 'start' }}
+          >
+            {showAdvanced ? '收起高级设置' : '展开高级设置'}
+          </button>
 
-            <div style={{ background: 'var(--purple-50)', borderRadius: 'var(--radius-md)', padding: 'var(--space-md)' }}>
-              <p style={{ fontSize: '0.85rem', color: 'var(--purple-800)', margin: 0 }}>
-                {mode === GAME_MODES.AGENT_VS_AGENT
-                  ? '观看两个 AI Agent 自主对战，你可以作为裁判围观全程。'
-                  : '你将直接挑战 AI Agent，用猜词实力争取胜利。'}
-              </p>
-            </div>
+          {showAdvanced && (
+            <>
+              <div className="form-group">
+                <label className="form-label" htmlFor="play-alias">可选别名（非必填）</label>
+                <input
+                  id="play-alias"
+                  className="input"
+                  value={alias}
+                  onChange={(event) => setAlias(event.target.value)}
+                  placeholder="默认使用你的账户名称"
+                />
+              </div>
 
-            <button
-              type="button"
-              className="btn btn--primary btn--lg btn--full"
-              onClick={() => void handleCreate()}
-              disabled={!!busy}
-            >
-              {busy === '正在创建房间...' ? '创建中...' : '创建房间'}
-            </button>
-          </div>
-        </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="participant-count">参战数量</label>
+                <select
+                  id="participant-count"
+                  className="select"
+                  value={participantCount}
+                  onChange={(event) => setParticipantCount(Number(event.target.value))}
+                >
+                  <option value={2}>2 人/Agent</option>
+                  <option value={3}>3 人/Agent</option>
+                  <option value={4}>4 人/Agent</option>
+                </select>
+              </div>
+            </>
+          )}
 
-        {/* Join Room */}
-        <div className="lobby-card animate-slide-up" style={{ animationDelay: '0.1s' }}>
-          <h2 className="lobby-card__title">加入房间</h2>
-          <p className="lobby-card__desc">输入房间 ID 并选择身份后加入对战。</p>
-
-          <div className="lobby-form">
-            <div className="form-group">
-              <label className="form-label" htmlFor="join-room">房间 ID</label>
-              <input
-                id="join-room"
-                className="input"
-                value={joinRoomId}
-                onChange={(e) => setJoinRoomId(e.target.value)}
-                placeholder="请输入房间 ID"
-                style={{ fontFamily: 'var(--font-mono)' }}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="join-type">加入身份</label>
-              <select
-                id="join-type"
-                className="select"
-                value={joinType}
-                onChange={(e) => setJoinType(e.target.value as ParticipantType)}
-              >
-                <option value={PARTICIPANT_TYPES.AGENT}>Agent</option>
-                <option value={PARTICIPANT_TYPES.HUMAN}>Human</option>
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="join-name">显示名称</label>
-              <input
-                id="join-name"
-                className="input"
-                value={joinName}
-                onChange={(e) => setJoinName(e.target.value)}
-                placeholder="挑战者"
-              />
-            </div>
-
-            <button
-              type="button"
-              className="btn btn--secondary btn--lg btn--full"
-              onClick={() => void handleJoin()}
-              disabled={!!busy}
-            >
-              {busy === '正在加入房间...' ? '加入中...' : '加入房间'}
-            </button>
-          </div>
+          <button
+            type="button"
+            className="btn btn--primary btn--lg btn--full"
+            onClick={() => void handleQuickStart()}
+            disabled={!!busy}
+          >
+            {busy ? '开战中...' : '一键快速开战'}
+          </button>
         </div>
       </div>
     </div>

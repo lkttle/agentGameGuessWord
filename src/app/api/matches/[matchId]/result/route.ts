@@ -39,8 +39,17 @@ export async function GET(
     const stat = byActor.get(participant.id) ?? { score: 0, correctCount: 0 };
     return {
       participantId: participant.id,
+      userId: participant.userId,
       displayName: participant.displayName,
       participantType: participant.participantType,
+      seatOrder: participant.seatOrder,
+      ownerUserId: participant.userId,
+      agentSource:
+        participant.participantType === 'AGENT'
+          ? participant.userId
+            ? 'SELF'
+            : 'PLATFORM'
+          : null,
       score: stat.score,
       correctCount: stat.correctCount
     };

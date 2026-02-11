@@ -8,6 +8,7 @@ export interface AgentTurnContext {
 }
 
 export interface AgentTurnResult {
+  participantId?: string;
   guessWord: string;
   usedFallback: boolean;
   attempts: number;
@@ -85,4 +86,37 @@ export async function runAgentTurnWithRetry(
     usedFallback: true,
     attempts
   };
+}
+
+export async function runAgentTurnsWithRetry(
+  participantIds: string[],
+  context: AgentTurnContext,
+  client: AgentTurnClient,
+  options?: {
+    timeoutMs?: number;
+    maxRetries?: number;
+    fallbackGuess?: string;
+  }
+): Promise<AgentTurnResult[]> {
+  const turns: AgentTurnResult[] = [];
+  const previousGuesses = [...context.previousGuesses];
+
+  for (const participantId of participantIds) {
+    const turn = await runAgentTurnWithRetry(
+      participantId,
+      {
+        ...context,
+        previousGuesses: [...previousGuesses]
+      },
+      client,
+      options
+    );
+    turns.push({
+      participantId,
+      ...turn
+    });
+    previousGuesses.push(turn.guessWord);
+  }
+
+  return turns;
 }

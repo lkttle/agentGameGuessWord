@@ -11,6 +11,7 @@ import {
 interface HumanMoveBody {
   participantId?: string;
   agentParticipantId?: string;
+  autoAgentResponse?: boolean;
   targetWord?: string;
   guessWord?: string;
   roundIndex?: number;
@@ -73,39 +74,52 @@ export async function POST(
   const roundIndex = body.roundIndex ?? match.totalRounds + 1;
   const humanResult = evaluateRound({ targetWord, guessWord, attemptIndex: 1 });
 
-  let agentTurn: { participantId: string; guessWord: string; usedFallback: boolean } | null = null;
-  let agentResult: ReturnType<typeof evaluateRound> | null = null;
+  const agentTurns: Array<{
+    participantId: string;
+    guessWord: string;
+    usedFallback: boolean;
+    result: ReturnType<typeof evaluateRound>;
+  }> = [];
 
-  if (!humanResult.isCorrect && body.agentParticipantId) {
-    const agentParticipant = match.room.participants.find(
-      (participant) =>
-        participant.id === body.agentParticipantId && participant.participantType === ParticipantType.AGENT
-    );
+  if (!humanResult.isCorrect && (body.agentParticipantId || body.autoAgentResponse !== false)) {
+    const agentParticipants = match.room.participants
+      .filter((participant) => participant.participantType === ParticipantType.AGENT)
+      .sort((left, right) => left.seatOrder - right.seatOrder);
 
-    if (agentParticipant) {
-      const client = new FallbackAgentTurnClient();
+    const selectedAgent = body.agentParticipantId
+      ? agentParticipants.filter((participant) => participant.id === body.agentParticipantId)
+      : agentParticipants;
+
+    const client = new FallbackAgentTurnClient();
+    const previousGuesses = [guessWord];
+
+    for (let index = 0; index < selectedAgent.length; index += 1) {
+      const agentParticipant = selectedAgent[index];
       const turn = await runAgentTurnWithRetry(
         agentParticipant.id,
         {
           roundIndex,
           hint: `${targetWord[0]}${'_'.repeat(Math.max(targetWord.length - 1, 0))}`,
-          previousGuesses: [guessWord]
+          previousGuesses: [...previousGuesses]
         },
         client,
         { timeoutMs: 3000, maxRetries: 2 }
       );
 
-      agentTurn = {
-        participantId: agentParticipant.id,
-        guessWord: turn.guessWord,
-        usedFallback: turn.usedFallback
-      };
-
-      agentResult = evaluateRound({
+      const result = evaluateRound({
         targetWord,
         guessWord: turn.guessWord,
-        attemptIndex: 2
+        attemptIndex: index + 2
       });
+
+      agentTurns.push({
+        participantId: agentParticipant.id,
+        guessWord: turn.guessWord,
+        usedFallback: turn.usedFallback,
+        result
+      });
+
+      previousGuesses.push(turn.guessWord);
     }
   }
 
@@ -123,18 +137,18 @@ export async function POST(
       }
     });
 
-    if (agentTurn && agentResult) {
-      await tx.roundLog.create({
-        data: {
+    if (agentTurns.length > 0) {
+      await tx.roundLog.createMany({
+        data: agentTurns.map((agentTurn) => ({
           matchId,
           roundIndex,
           actorType: ParticipantType.AGENT,
           actorId: agentTurn.participantId,
           guessWord: agentTurn.guessWord,
-          isCorrect: agentResult.isCorrect,
-          scoreDelta: agentResult.scoreDelta,
+          isCorrect: agentTurn.result.isCorrect,
+          scoreDelta: agentTurn.result.scoreDelta,
           timedOut: false
-        }
+        }))
       });
     }
 
@@ -151,11 +165,6 @@ export async function POST(
       guessWord,
       result: humanResult
     },
-    agent: agentTurn
-      ? {
-          ...agentTurn,
-          result: agentResult
-        }
-      : null
+    agents: agentTurns
   });
 }

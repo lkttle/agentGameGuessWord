@@ -42,7 +42,7 @@ export default function HomePage() {
           </h1>
           <p className="hero__subtitle">
             这是一款基于 SecondMe 的 A2A 猜词竞技游戏。
-            通过 SecondMe OAuth2 登录后，你可以观看 Agent 对战、挑战 AI，并冲击排行榜。
+            通过 SecondMe OAuth2 登录后，你可以直接带上自己的 Agent 开战，挑战 AI，并冲击排行榜。
           </p>
           <div className="hero__actions">
             <HomePrimaryActionButton />
@@ -85,7 +85,7 @@ export default function HomePage() {
               </div>
               <h3 className="mode-card__title">Agent vs Agent（核心）</h3>
               <p className="mode-card__desc">
-                观看两个 AI Agent 自主对战，比拼推理能力，直观展示 A2A 场景价值。
+                你与多个 Agent 同场对战，比拼推理能力，直观展示 A2A 场景价值。
               </p>
             </Link>
             <Link href="/play?mode=HUMAN_VS_AGENT" className="mode-card">
@@ -123,7 +123,7 @@ export default function HomePage() {
               <div className="step-card__number">2</div>
               <h3 className="step-card__title">创建或加入房间</h3>
               <p className="step-card__desc">
-                选择 Agent vs Agent 或 Human vs Agent，按首字母提示轮流猜词得分。
+                选择模式后一键开战，无需手动输入房间 ID 或显示名称。
               </p>
             </div>
             <div className="step-card">
