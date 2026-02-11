@@ -37,6 +37,8 @@ interface RoundLogEntry {
 
 interface HumanMoveResponse {
   roundIndex: number;
+  skipped?: boolean;
+  reason?: string;
   human: {
     participantId: string;
     guessWord: string;
@@ -289,6 +291,10 @@ async function playTTS(
 
         if (!audioUnlocked) {
           await unlockAudioPlayback('tts_attempt');
+        }
+
+        if (sessionVersion !== ttsSessionVersion || !audioUnlocked) {
+          return settle(false);
         }
 
         ttsClientLog('request_start', {
@@ -999,6 +1005,7 @@ export default function RoomPage() {
   async function handleAgentRound() {
     if (!currentQuestion || !pageActiveRef.current || switchingQuestionRef.current) return;
     const questionKey = currentQuestionKeyRef.current;
+    if (!questionKey) return;
     const prevLogCount = match?.roundLogs?.length ?? 0;
     const completed = await runAction('Agent 对战中...', async () => {
       await api(`/api/matches/${match!.id}/agent-round`, {
@@ -1007,6 +1014,7 @@ export default function RoomPage() {
           targetWord: currentQuestion.answer,
           pinyinHint: currentQuestion.initialsText,
           categoryHint: currentQuestion.category,
+          questionKey,
           roundIndex: (match?.totalRounds ?? 0) + 1
         })
       });
@@ -1030,6 +1038,7 @@ export default function RoomPage() {
   async function handleAgentRoundOnly() {
     if (!currentQuestion || !pageActiveRef.current || switchingQuestionRef.current) return;
     const questionKey = currentQuestionKeyRef.current;
+    if (!questionKey) return;
     const prevLogCount = match?.roundLogs?.length ?? 0;
     const completed = await runAction('超时！Agent 回合中...', async () => {
       await api(`/api/matches/${match!.id}/agent-round`, {
@@ -1038,6 +1047,7 @@ export default function RoomPage() {
           targetWord: currentQuestion.answer,
           pinyinHint: currentQuestion.initialsText,
           categoryHint: currentQuestion.category,
+          questionKey,
           roundIndex: (match?.totalRounds ?? 0) + 1
         })
       });
@@ -1062,6 +1072,7 @@ export default function RoomPage() {
     if (!guessWord.trim()) { setError('请输入你猜测的中文词语'); return; }
     if (!currentQuestion) { setError('正在加载题目...'); return; }
     const questionKey = currentQuestionKeyRef.current;
+    if (!questionKey) return;
 
     const prevLogCount = match?.roundLogs?.length ?? 0;
     const submittedWord = guessWord.trim();
@@ -1081,9 +1092,15 @@ export default function RoomPage() {
           targetWord: currentQuestion.answer,
           pinyinHint: currentQuestion.initialsText,
           categoryHint: currentQuestion.category,
+          questionKey,
           guessWord: submittedWord
         })
       });
+
+      if (humanMoveResult.skipped) {
+        await fetchRoom();
+        return;
+      }
     } catch (err) {
       if (!pageActiveRef.current) return;
       setGuessWord(submittedWord);
@@ -1112,6 +1129,7 @@ export default function RoomPage() {
             targetWord: currentQuestion.answer,
             pinyinHint: currentQuestion.initialsText,
             categoryHint: currentQuestion.category,
+            questionKey,
             roundIndex: humanMoveResult.roundIndex
           })
         });
@@ -1270,7 +1288,8 @@ export default function RoomPage() {
                         <span className="chat-bubble__round">R{log.roundIndex}</span>
                         {isAgent && (
                           <span className="chat-bubble__tts-icon" title="语音播放" onClick={() => {
-                            if (log.guessWord) {
+            if (log.guessWord) {
+                              void unlockAudioPlayback('manual_tts_click');
                               void playTTSWithRetry(log.guessWord, {
                                 userId: player?.ownerUserId ?? player?.userId,
                                 participantId: player?.id

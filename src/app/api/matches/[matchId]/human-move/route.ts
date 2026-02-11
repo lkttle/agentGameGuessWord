@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth/current-user';
 import {
   evaluateRound,
   evaluateAgentGuess,
+  formatAgentReplyForRoom,
   extractGuessWord,
   timeoutRoundResult
 } from '@/lib/game/guess-word-engine';
@@ -23,6 +24,7 @@ interface HumanMoveBody {
   roundIndex?: number;
   pinyinHint?: string;
   categoryHint?: string;
+  questionKey?: string;
 }
 
 function isValidGuess(input: string): boolean {
@@ -58,6 +60,7 @@ export async function POST(
   }
 
   const body = (await request.json()) as HumanMoveBody;
+  const expectedQuestionKey = body.questionKey?.trim();
   const guessWord = body.guessWord?.trim();
   const targetWord = body.targetWord?.trim();
 
@@ -83,6 +86,26 @@ export async function POST(
   }
 
   const roundIndex = body.roundIndex ?? match.totalRounds + 1;
+  const serverQuestionKey = [
+    body.pinyinHint?.trim() ?? '',
+    targetWord.toLowerCase(),
+    body.categoryHint?.trim() ?? ''
+  ].join('|');
+
+  if (expectedQuestionKey && expectedQuestionKey !== serverQuestionKey) {
+    return NextResponse.json({
+      roundIndex,
+      human: {
+        participantId: humanParticipant.id,
+        guessWord,
+        result: timeoutRoundResult(targetWord)
+      },
+      agents: [],
+      skipped: true,
+      reason: 'stale_question_key'
+    });
+  }
+
   const humanResult = evaluateRound({ targetWord, guessWord, attemptIndex: 1 });
   const expectedLength = body.pinyinHint?.length ?? targetWord.length;
 
@@ -117,6 +140,7 @@ export async function POST(
         hint: `${targetWord[0]}${'_'.repeat(Math.max(targetWord.length - 1, 0))}`,
         pinyinHint: body.pinyinHint ?? undefined,
         categoryHint: body.categoryHint?.trim() || undefined,
+        questionKey: body.questionKey?.trim() || undefined,
         previousGuesses: [...previousGuesses]
       },
       client,
@@ -127,6 +151,7 @@ export async function POST(
       const turn = rawTurns[index];
       const rawResponse = turn.guessWord?.trim() ?? '';
       const extractedWord = extractGuessWord(rawResponse, expectedLength);
+      const roomDisplayGuess = formatAgentReplyForRoom(rawResponse, extractedWord);
       const result = turn.usedFallback
         ? timeoutRoundResult(targetWord)
         : evaluateAgentGuess({
@@ -138,7 +163,7 @@ export async function POST(
 
       agentTurns.push({
         participantId: turn.participantId ?? '',
-        guessWord: rawResponse,
+        guessWord: roomDisplayGuess,
         usedFallback: turn.usedFallback,
         result
       });

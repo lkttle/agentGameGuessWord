@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth/current-user';
 import {
   buildInitialLetterHint,
   evaluateAgentGuess,
+  formatAgentReplyForRoom,
   extractGuessWord,
   timeoutRoundResult
 } from '@/lib/game/guess-word-engine';
@@ -19,6 +20,7 @@ interface AgentRoundBody {
   roundIndex?: number;
   pinyinHint?: string;
   categoryHint?: string;
+  questionKey?: string;
 }
 
 export async function POST(
@@ -50,6 +52,7 @@ export async function POST(
   }
 
   const body = (await request.json()) as AgentRoundBody;
+  const expectedQuestionKey = body.questionKey?.trim();
   const targetWord = body.targetWord?.trim().toLowerCase();
   if (!targetWord) {
     return NextResponse.json({ error: 'targetWord is required' }, { status: 400 });
@@ -64,6 +67,21 @@ export async function POST(
   }
 
   const roundIndex = body.roundIndex ?? match.totalRounds + 1;
+  const serverQuestionKey = [
+    body.pinyinHint?.trim() ?? '',
+    targetWord,
+    body.categoryHint?.trim() ?? ''
+  ].join('|');
+
+  if (expectedQuestionKey && expectedQuestionKey !== serverQuestionKey) {
+    return NextResponse.json({
+      roundIndex,
+      turns: [],
+      skipped: true,
+      reason: 'stale_question_key'
+    });
+  }
+
   const hint = buildInitialLetterHint(targetWord);
   const expectedLength = body.pinyinHint?.length ?? targetWord.length;
 
@@ -82,6 +100,7 @@ export async function POST(
       hint,
       pinyinHint: body.pinyinHint ?? undefined,
       categoryHint: body.categoryHint?.trim() || undefined,
+      questionKey: body.questionKey?.trim() || undefined,
       previousGuesses: []
     },
     client,
@@ -104,6 +123,7 @@ export async function POST(
     const turn = rawTurns[index];
     const rawResponse = turn.guessWord?.trim() ?? '';
     const extractedWord = extractGuessWord(rawResponse, expectedLength);
+    const roomDisplayGuess = formatAgentReplyForRoom(rawResponse, extractedWord);
     const result = turn.usedFallback
       ? timeoutRoundResult(targetWord)
       : evaluateAgentGuess({
@@ -115,7 +135,7 @@ export async function POST(
 
     turns.push({
       participantId: turn.participantId ?? '',
-      guessWord: rawResponse,
+      guessWord: roomDisplayGuess,
       usedFallback: turn.usedFallback,
       attempts: turn.attempts,
       ...result
