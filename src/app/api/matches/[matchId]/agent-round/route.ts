@@ -5,7 +5,6 @@ import { getCurrentUser } from '@/lib/auth/current-user';
 import {
   buildInitialLetterHint,
   evaluateAgentGuess,
-  formatAgentReplyForRoom,
   extractGuessWord,
   timeoutRoundResult
 } from '@/lib/game/guess-word-engine';
@@ -123,7 +122,6 @@ export async function POST(
     const turn = rawTurns[index];
     const rawResponse = turn.guessWord?.trim() ?? '';
     const extractedWord = extractGuessWord(rawResponse, expectedLength);
-    const roomDisplayGuess = formatAgentReplyForRoom(rawResponse, extractedWord);
     const result = turn.usedFallback
       ? timeoutRoundResult(targetWord)
       : evaluateAgentGuess({
@@ -135,7 +133,7 @@ export async function POST(
 
     turns.push({
       participantId: turn.participantId ?? '',
-      guessWord: roomDisplayGuess,
+      guessWord: rawResponse,
       usedFallback: turn.usedFallback,
       attempts: turn.attempts,
       ...result

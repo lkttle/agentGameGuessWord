@@ -248,6 +248,26 @@ function questionToKey(question: PinyinQuestion | null): string {
   return `${question.initialsText}|${question.answer}|${question.category}`;
 }
 
+function dataUrlToBlobUrl(dataUrl: string): string | null {
+  const match = dataUrl.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,(.+)$/i);
+  if (!match) return null;
+
+  const mimeType = match[1] || 'audio/mpeg';
+  const base64 = match[2];
+
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    const blob = new Blob([bytes], { type: mimeType });
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
+
 async function drainTtsQueue() {
   if (ttsProcessing) return;
   ttsProcessing = true;
@@ -352,9 +372,26 @@ async function playTTS(
         }
 
         const audio = getReusableAudio();
+        let blobUrl: string | null = null;
+        let playbackUrl = url;
+
+        if (url.startsWith('data:')) {
+          blobUrl = dataUrlToBlobUrl(url);
+          if (blobUrl) {
+            playbackUrl = blobUrl;
+            ttsClientLog('audio_url_blob_proxy', {
+              participantId: options?.participantId ?? null
+            });
+          } else {
+            ttsClientLog('audio_url_blob_proxy_failed', {
+              participantId: options?.participantId ?? null
+            });
+          }
+        }
+
         audio.pause();
         audio.currentTime = 0;
-        audio.src = url;
+        audio.src = playbackUrl;
         audio.volume = 0.7;
         audio.muted = false;
         audio.setAttribute('playsinline', 'true');
@@ -369,6 +406,10 @@ async function playTTS(
         const played = await new Promise<boolean>((audioResolve) => {
           const fallbackTimer = setTimeout(() => {
             audio.pause();
+            if (blobUrl) {
+              URL.revokeObjectURL(blobUrl);
+              blobUrl = null;
+            }
             if (activeAudioElement === audio) {
               activeAudioElement = null;
             }
@@ -378,6 +419,10 @@ async function playTTS(
           if (sessionVersion !== ttsSessionVersion) {
             clearTimeout(fallbackTimer);
             audio.pause();
+            if (blobUrl) {
+              URL.revokeObjectURL(blobUrl);
+              blobUrl = null;
+            }
             if (activeAudioElement === audio) {
               activeAudioElement = null;
             }
@@ -387,6 +432,10 @@ async function playTTS(
 
           audio.onended = () => {
             clearTimeout(fallbackTimer);
+            if (blobUrl) {
+              URL.revokeObjectURL(blobUrl);
+              blobUrl = null;
+            }
             if (activeAudioElement === audio) {
               activeAudioElement = null;
             }
@@ -398,6 +447,10 @@ async function playTTS(
           audio.onerror = () => {
             clearTimeout(fallbackTimer);
             audio.pause();
+            if (blobUrl) {
+              URL.revokeObjectURL(blobUrl);
+              blobUrl = null;
+            }
             if (activeAudioElement === audio) {
               activeAudioElement = null;
             }
@@ -410,6 +463,10 @@ async function playTTS(
           audio.play().catch((error) => {
             clearTimeout(fallbackTimer);
             audio.pause();
+            if (blobUrl) {
+              URL.revokeObjectURL(blobUrl);
+              blobUrl = null;
+            }
             if (activeAudioElement === audio) {
               activeAudioElement = null;
             }

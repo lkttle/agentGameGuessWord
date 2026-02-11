@@ -80,8 +80,8 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
       `拼音首字母提示：${pinyinInitials}。`,
       categoryPrompt,
       previousGuessesPrompt,
-      '请先自由地说出你的推理和联想，再给出你最终猜测的中文词语。',
-      '最终猜测务必用【答案：xxx】格式单独写在最后一行。'
+      '请直接给出你的猜测，可以自然一点，但尽量控制在20字以内。',
+      '不要输出太长内容。'
     ].join('');
 
     const result = await secondMeSdk.chatStream(accessToken, {

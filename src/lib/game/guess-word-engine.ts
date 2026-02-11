@@ -195,30 +195,3 @@ export function evaluateAgentGuess(input: {
     timedOut: false
   };
 }
-
-export function formatAgentReplyForRoom(
-  rawResponse: string,
-  extractedWord: string,
-  maxLength = 20
-): string {
-  const normalized = rawResponse.replace(/\s+/g, ' ').trim();
-
-  if (!normalized) {
-    return extractedWord.trim().slice(0, maxLength);
-  }
-
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-
-  const compactAnswer = extractedWord.trim();
-  if (compactAnswer) {
-    const withPrefix = `答案：${compactAnswer}`;
-    if (withPrefix.length <= maxLength) {
-      return withPrefix;
-    }
-    return Array.from(withPrefix).slice(0, maxLength).join('');
-  }
-
-  return Array.from(normalized).slice(0, maxLength).join('');
-}
