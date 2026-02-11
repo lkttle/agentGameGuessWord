@@ -184,15 +184,29 @@ async function unlockAudioPlayback(trigger: string): Promise<void> {
       audio.src = SILENT_AUDIO_DATA_URL;
       audio.currentTime = 0;
       await audio.play();
-      audio.pause();
-      audio.currentTime = 0;
       audio.muted = false;
       audioUnlocked = true;
       ttsClientLog('audio_unlock_success', { trigger });
+
+      setTimeout(() => {
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch {
+          /* ignore */
+        }
+      }, 120);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      if (message.includes('interrupted by a call to pause')) {
+        audioUnlocked = true;
+        ttsClientLog('audio_unlock_soft_success', { trigger, error: message });
+      }
+
       ttsClientLog('audio_unlock_failed', {
         trigger,
-        error: error instanceof Error ? error.message : String(error)
+        error: message
       });
     } finally {
       const audio = getReusableAudio();
@@ -313,7 +327,7 @@ async function playTTS(
           await unlockAudioPlayback('tts_attempt');
         }
 
-        if (sessionVersion !== ttsSessionVersion || !audioUnlocked) {
+        if (sessionVersion !== ttsSessionVersion) {
           return settle(false);
         }
 
