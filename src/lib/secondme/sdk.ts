@@ -6,6 +6,22 @@ interface SecondMeEnvelope<T> {
   data: T;
 }
 
+function pickFirstNumber(raw: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
 export interface SecondMeTokenData {
   accessToken: string;
   refreshToken: string;
@@ -189,11 +205,18 @@ export class SecondMeSdk {
       message: string;
       sessionId?: string;
       systemPrompt?: string;
+      requestTimeoutMs?: number;
     }
   ): Promise<{ sessionId: string; content: string }> {
     const body: Record<string, string> = { message: options.message };
     if (options.sessionId) body.sessionId = options.sessionId;
     if (options.systemPrompt) body.systemPrompt = options.systemPrompt;
+
+    const controller = new AbortController();
+    const timeoutMs = options.requestTimeoutMs;
+    const timeout = typeof timeoutMs === 'number' && timeoutMs > 0
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null;
 
     const response = await fetch(`${env.secondmeApiBaseUrl}/api/secondme/chat/stream`, {
       method: 'POST',
@@ -203,7 +226,12 @@ export class SecondMeSdk {
         Accept: 'text/event-stream'
       },
       body: JSON.stringify(body),
-      cache: 'no-store'
+      cache: 'no-store',
+      signal: controller.signal
+    }).finally(() => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     });
 
     if (!response.ok) {
@@ -277,14 +305,19 @@ export class SecondMeSdk {
 
     const payload = (await response.json()) as SecondMeEnvelope<Record<string, unknown>>;
     if (payload.code !== 0) {
-      throw new Error(`SecondMe TTS rejected: code=${payload.code}`);
+      throw new Error(`SecondMe TTS rejected: code=${payload.code}, message=${payload.message ?? 'unknown'}`);
     }
 
+    const audioUrl = pickFirstString(payload.data, ['url', 'audioUrl', 'audio_url', 'fileUrl', 'file_url']);
+    const durationMs = pickFirstNumber(payload.data, ['durationMs', 'duration_ms']) ?? 0;
+    const sampleRate = pickFirstNumber(payload.data, ['sampleRate', 'sample_rate']);
+    const format = pickFirstString(payload.data, ['format']);
+
     return {
-      url: String(payload.data.url ?? ''),
-      durationMs: Number(payload.data.durationMs ?? payload.data.duration_ms ?? 0),
-      sampleRate: payload.data.sampleRate ? Number(payload.data.sampleRate) : undefined,
-      format: payload.data.format ? String(payload.data.format) : undefined
+      url: audioUrl ? resolveEndpoint(audioUrl) : '',
+      durationMs,
+      sampleRate,
+      format
     };
   }
 }

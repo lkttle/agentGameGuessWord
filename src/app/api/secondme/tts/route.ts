@@ -58,12 +58,19 @@ export async function POST(request: Request): Promise<Response> {
       emotion: body.emotion ?? 'happy'
     });
 
+    if (!result.url) {
+      return NextResponse.json(
+        { error: 'TTS generation succeeded but no audio url returned' },
+        { status: 502 }
+      );
+    }
+
     return NextResponse.json({
       code: 0,
       data: result
     });
   } catch (error) {
-    console.error('TTS generation failed:', error);
+    console.error('TTS generation failed:', error instanceof Error ? error.message : error);
     return NextResponse.json(
       { error: 'TTS generation failed' },
       { status: 502 }

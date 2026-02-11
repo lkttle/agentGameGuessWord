@@ -6,6 +6,7 @@ export interface AgentTurnContext {
   pinyinHint?: string;
   previousGuesses: string[];
   instruction?: string;
+  timeoutMs?: number;
 }
 
 export interface AgentTurnResult {
@@ -53,7 +54,10 @@ export async function runAgentTurnWithRetry(
     attempts += 1;
     try {
       const execution = await executeWithTimeout(
-        client.generateGuess(agentId, context),
+        client.generateGuess(agentId, {
+          ...context,
+          timeoutMs
+        }),
         timeoutMs,
         () => fallbackGuess
       );
@@ -99,25 +103,24 @@ export async function runAgentTurnsWithRetry(
     fallbackGuess?: string;
   }
 ): Promise<AgentTurnResult[]> {
-  const turns: AgentTurnResult[] = [];
-  const previousGuesses = [...context.previousGuesses];
+  const turns = await Promise.all(
+    participantIds.map(async (participantId) => {
+      const turn = await runAgentTurnWithRetry(
+        participantId,
+        {
+          ...context,
+          previousGuesses: [...context.previousGuesses]
+        },
+        client,
+        options
+      );
 
-  for (const participantId of participantIds) {
-    const turn = await runAgentTurnWithRetry(
-      participantId,
-      {
-        ...context,
-        previousGuesses: [...previousGuesses]
-      },
-      client,
-      options
-    );
-    turns.push({
-      participantId,
-      ...turn
-    });
-    previousGuesses.push(turn.guessWord);
-  }
+      return {
+        participantId,
+        ...turn
+      };
+    })
+  );
 
   return turns;
 }

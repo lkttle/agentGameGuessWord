@@ -2,10 +2,10 @@ import { MatchStatus, ParticipantType } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
-import { evaluateRound, evaluateAgentGuess } from '@/lib/game/guess-word-engine';
+import { evaluateRound, evaluateAgentGuess, timeoutRoundResult } from '@/lib/game/guess-word-engine';
 import {
   FallbackAgentTurnClient,
-  runAgentTurnWithRetry
+  runAgentTurnsWithRetry
 } from '@/lib/agent/orchestrator';
 import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
 
@@ -103,36 +103,35 @@ export async function POST(
       client = new FallbackAgentTurnClient();
     }
     const previousGuesses = [guessWord];
+    const rawTurns = await runAgentTurnsWithRetry(
+      selectedAgent.map((participant) => participant.id),
+      {
+        roundIndex,
+        hint: `${targetWord[0]}${'_'.repeat(Math.max(targetWord.length - 1, 0))}`,
+        pinyinHint: body.pinyinHint ?? undefined,
+        previousGuesses: [...previousGuesses]
+      },
+      client,
+      { timeoutMs: 15000, maxRetries: 1 }
+    );
 
-    for (let index = 0; index < selectedAgent.length; index += 1) {
-      const agentParticipant = selectedAgent[index];
-      const turn = await runAgentTurnWithRetry(
-        agentParticipant.id,
-        {
-          roundIndex,
-          hint: `${targetWord[0]}${'_'.repeat(Math.max(targetWord.length - 1, 0))}`,
-          pinyinHint: body.pinyinHint ?? undefined,
-          previousGuesses: [...previousGuesses]
-        },
-        client,
-        { timeoutMs: 15000, maxRetries: 1 }
-      );
-
-      const result = evaluateAgentGuess({
-        targetWord,
-        rawResponse: turn.guessWord,
-        extractedWord: turn.guessWord,
-        attemptIndex: index + 2
-      });
+    for (let index = 0; index < rawTurns.length; index += 1) {
+      const turn = rawTurns[index];
+      const result = turn.usedFallback
+        ? timeoutRoundResult(targetWord)
+        : evaluateAgentGuess({
+            targetWord,
+            rawResponse: turn.guessWord,
+            extractedWord: turn.guessWord,
+            attemptIndex: index + 2
+          });
 
       agentTurns.push({
-        participantId: agentParticipant.id,
+        participantId: turn.participantId ?? '',
         guessWord: turn.guessWord,
         usedFallback: turn.usedFallback,
         result
       });
-
-      previousGuesses.push(turn.guessWord);
     }
   }
 

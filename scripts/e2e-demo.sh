@@ -62,11 +62,14 @@ echo "[9/12] player joins HVA as AGENT"
 JOIN_HVA_JSON=$(curl -sS -b "$PLAYER_COOKIE" -X POST "$BASE_URL/api/rooms/$HVA_ROOM_ID/join" -H 'Content-Type: application/json' --data '{"participantType":"AGENT","displayName":"Agent Rival"}')
 HVA_AGENT_ID=$(printf '%s' "$JOIN_HVA_JSON" | json_get "participant.id")
 
-echo "[10/12] start HVA room and submit human move"
+echo "[10/12] start HVA room, submit human move, then trigger agent round"
 HVA_START_JSON=$(curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/rooms/$HVA_ROOM_ID/start" -H 'Content-Type: application/json' --data '{}')
 HVA_MATCH_ID=$(printf '%s' "$HVA_START_JSON" | json_get "match.id")
 
-curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/matches/$HVA_MATCH_ID/human-move" -H 'Content-Type: application/json' --data "{\"participantId\":\"$HVA_HUMAN_ID\",\"agentParticipantId\":\"$HVA_AGENT_ID\",\"targetWord\":\"吃饭\",\"guessWord\":\"出发\",\"roundIndex\":1}" | json_get "roundIndex" >/dev/null
+HVA_HUMAN_MOVE_JSON=$(curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/matches/$HVA_MATCH_ID/human-move" -H 'Content-Type: application/json' --data "{\"participantId\":\"$HVA_HUMAN_ID\",\"targetWord\":\"吃饭\",\"guessWord\":\"出发\",\"roundIndex\":1,\"autoAgentResponse\":false}")
+HVA_ROUND_INDEX=$(printf '%s' "$HVA_HUMAN_MOVE_JSON" | json_get "roundIndex")
+
+curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/matches/$HVA_MATCH_ID/agent-round" -H 'Content-Type: application/json' --data "{\"targetWord\":\"吃饭\",\"roundIndex\":$HVA_ROUND_INDEX}" | json_get "roundIndex" >/dev/null
 
 echo "[11/12] finish HVA room"
 curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/rooms/$HVA_ROOM_ID/finish" -H 'Content-Type: application/json' --data "{\"winnerUserId\":\"$PLAYER_USER_ID\",\"totalRounds\":1}" | json_get "room.status" >/dev/null

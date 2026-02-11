@@ -35,6 +35,33 @@ interface RoundLogEntry {
   scoreDelta: number;
 }
 
+interface HumanMoveResponse {
+  roundIndex: number;
+  human: {
+    participantId: string;
+    guessWord: string;
+    result: {
+      isCorrect: boolean;
+      scoreDelta: number;
+      normalizedGuess: string;
+      normalizedTarget: string;
+      timedOut: boolean;
+    };
+  };
+  agents: Array<{
+    participantId: string;
+    guessWord: string;
+    usedFallback: boolean;
+    result: {
+      isCorrect: boolean;
+      scoreDelta: number;
+      normalizedGuess: string;
+      normalizedTarget: string;
+      timedOut: boolean;
+    };
+  }>;
+}
+
 interface RoomState {
   room: {
     id: string;
@@ -262,6 +289,7 @@ export default function RoomPage() {
   const [session, setSession] = useState<SessionData | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [guessWord, setGuessWord] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState<PinyinQuestion | null>(null);
   const [failedRounds, setFailedRounds] = useState(0);
@@ -380,9 +408,9 @@ export default function RoomPage() {
     }
   }, [timeLeft, room?.status, isHost]);
 
-  // Per-turn 20s timer - start when match is running and not busy
+  // Per-turn 20s timer - start when match is running and no active action
   useEffect(() => {
-    if (room?.status !== 'RUNNING' || !currentQuestion || !!busy) {
+    if (room?.status !== 'RUNNING' || !currentQuestion || isSubmitting || !!busy) {
       if (turnTimerRef.current) clearInterval(turnTimerRef.current);
       setTurnTimeLeft(null);
       return;
@@ -398,11 +426,11 @@ export default function RoomPage() {
     return () => {
       if (turnTimerRef.current) clearInterval(turnTimerRef.current);
     };
-  }, [room?.status, currentQuestion, match?.roundLogs?.length, !!busy]);
+  }, [room?.status, currentQuestion, match?.roundLogs?.length, isSubmitting, busy]);
 
   // Auto-skip turn when per-turn timer reaches 0
   useEffect(() => {
-    if (turnTimeLeft !== 0 || !currentQuestion || room?.status !== 'RUNNING' || turnSkippingRef.current || !!busy) return;
+    if (turnTimeLeft !== 0 || !currentQuestion || room?.status !== 'RUNNING' || turnSkippingRef.current || isSubmitting || !!busy) return;
     turnSkippingRef.current = true;
     if (turnTimerRef.current) clearInterval(turnTimerRef.current);
     if (room.mode === GAME_MODES.AGENT_VS_AGENT) {
@@ -411,7 +439,7 @@ export default function RoomPage() {
       // In HUMAN_VS_AGENT, auto-trigger agent round (skip human turn)
       void handleAgentRoundOnly();
     }
-  }, [turnTimeLeft, room?.status, currentQuestion, busy]);
+  }, [turnTimeLeft, room?.status, currentQuestion, isSubmitting, busy]);
 
   // Polling
   useEffect(() => {
@@ -449,10 +477,11 @@ export default function RoomPage() {
       !isHost ||
       !currentQuestion ||
       !!busy ||
+      isSubmitting ||
       autoAgentRunningRef.current
     ) return;
     autoAgentRunningRef.current = true;
-    const delay = match?.roundLogs?.length ? 2000 : 500;
+    const delay = match?.roundLogs?.length ? 1000 : 300;
     const timer = setTimeout(() => {
       autoAgentRunningRef.current = false;
       void handleAgentRound();
@@ -461,7 +490,7 @@ export default function RoomPage() {
       clearTimeout(timer);
       autoAgentRunningRef.current = false;
     };
-  }, [room?.mode, room?.status, isHost, currentQuestion, busy, match?.roundLogs?.length]);
+  }, [room?.mode, room?.status, isHost, currentQuestion, busy, isSubmitting, match?.roundLogs?.length]);
 
   async function runAction(label: string, action: () => Promise<void>) {
     try {
@@ -534,31 +563,66 @@ export default function RoomPage() {
   async function handleHumanMove() {
     if (!guessWord.trim()) { setError('请输入你猜测的中文词语'); return; }
     if (!currentQuestion) { setError('正在加载题目...'); return; }
+
     const prevLogCount = match?.roundLogs?.length ?? 0;
-    await runAction('提交猜词中...', async () => {
-      await api(`/api/matches/${match!.id}/human-move`, {
+    const submittedWord = guessWord.trim();
+
+    setGuessWord('');
+    setError('');
+    setIsSubmitting(true);
+
+    let humanMoveResult: HumanMoveResponse;
+
+    try {
+      humanMoveResult = await api<HumanMoveResponse>(`/api/matches/${match!.id}/human-move`, {
         method: 'POST',
         body: JSON.stringify({
           participantId: humanParticipant?.id,
-          agentParticipantId: agentParticipants[0]?.id,
-          autoAgentResponse: true,
-          targetWord: currentQuestion!.answer,
-          pinyinHint: currentQuestion!.initialsText,
-          guessWord: guessWord.trim()
+          autoAgentResponse: false,
+          targetWord: currentQuestion.answer,
+          pinyinHint: currentQuestion.initialsText,
+          guessWord: submittedWord
         })
       });
-      setGuessWord('');
-    });
+    } catch (err) {
+      setGuessWord(submittedWord);
+      setError(err instanceof Error ? err.message : '操作失败，请稍后重试');
+      await fetchRoom();
+      return;
+    } finally {
+      setIsSubmitting(false);
+    }
+
+    await fetchRoom();
+
+    if (humanMoveResult.human.result.isCorrect) {
+      await fetchQuestion();
+      return;
+    }
+
+    if (agentParticipants.length > 0) {
+      await runAction('Agent 回答中...', async () => {
+        await api(`/api/matches/${match!.id}/agent-round`, {
+          method: 'POST',
+          body: JSON.stringify({
+            targetWord: currentQuestion.answer,
+            pinyinHint: currentQuestion.initialsText,
+            roundIndex: humanMoveResult.roundIndex
+          })
+        });
+      });
+    }
+
     const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
     if (freshState) {
       setRoomState(freshState);
       const newLogs = freshState.room.match?.roundLogs ?? [];
       const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
-      const anyCorrect = latestLogs.some(l => l.isCorrect);
+      const anyCorrect = latestLogs.some((log) => log.isCorrect);
       if (anyCorrect) {
-        void fetchQuestion();
-      } else {
-        setFailedRounds(prev => prev + 1);
+        await fetchQuestion();
+      } else if (latestLogs.length > 0) {
+        setFailedRounds((prev) => prev + 1);
       }
     }
   }
@@ -658,9 +722,9 @@ export default function RoomPage() {
         {/* Chat Messages Area - Left/Right Layout */}
         <div className="chatroom__messages">
           {error && <div className="alert alert--error mb-md">{error}</div>}
-          {busy && (
+          {(busy || isSubmitting) && (
             <div className="chatroom__system-msg">
-              <span className="loading-spinner" /> {busy}
+              <span className="loading-spinner" /> {isSubmitting ? '提交猜词中...' : busy}
             </div>
           )}
 
@@ -748,7 +812,7 @@ export default function RoomPage() {
                   type="button"
                   className="btn btn--primary btn--full"
                   onClick={() => void handleAgentRound()}
-                  disabled={!!busy}
+                  disabled={!!busy || isSubmitting}
                 >
                   运行 Agent 回合
                 </button>
@@ -756,7 +820,7 @@ export default function RoomPage() {
                   type="button"
                   className="btn btn--accent"
                   onClick={() => void handleFinish()}
-                  disabled={!!busy}
+                  disabled={!!busy || isSubmitting}
                 >
                   结束对局
                 </button>
@@ -775,7 +839,7 @@ export default function RoomPage() {
                     type="button"
                     className="btn btn--primary chatroom__send-btn"
                     onClick={() => void handleHumanMove()}
-                    disabled={!!busy}
+                    disabled={!!busy || isSubmitting}
                   >
                     发送
                   </button>
@@ -785,7 +849,7 @@ export default function RoomPage() {
                     type="button"
                     className="btn btn--accent btn--sm"
                     onClick={() => void handleFinish()}
-                    disabled={!!busy}
+                    disabled={!!busy || isSubmitting}
                     style={{ marginTop: 'var(--space-xs)' }}
                   >
                     结束对局

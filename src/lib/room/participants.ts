@@ -71,6 +71,7 @@ export function buildParticipantConfigs(options: BuildParticipantConfigOptions):
     if (options.autoJoinSelfAgent) {
       participants.push({
         type: ParticipantType.AGENT,
+        userId: options.host.id,
         displayName: buildSelfAgentName(options.host),
         ownerUserId: options.host.id,
         agentSource: AGENT_SOURCES.SELF
@@ -111,6 +112,7 @@ export function buildParticipantConfigs(options: BuildParticipantConfigOptions):
   if (options.autoJoinSelfAgent) {
     participants.push({
       type: ParticipantType.AGENT,
+      userId: options.host.id,
       displayName: buildSelfAgentName(options.host),
       ownerUserId: options.host.id,
       agentSource: AGENT_SOURCES.SELF

@@ -101,7 +101,8 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
 
     const result = await secondMeSdk.chatStream(accessToken, {
       message: prompt,
-      sessionId
+      sessionId,
+      requestTimeoutMs: context.timeoutMs
     });
 
     // Save session ID for future reuse
