@@ -21,7 +21,7 @@ export interface AgentTurnClient {
 }
 
 export class FallbackAgentTurnClient implements AgentTurnClient {
-  async generateGuess(_agentId: string, _context: AgentTurnContext): Promise<string> {
+  async generateGuess(): Promise<string> {
     return '';
   }
 }
