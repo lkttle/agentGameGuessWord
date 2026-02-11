@@ -16,6 +16,7 @@ import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
 interface AgentRoundBody {
   targetWord?: string;
   roundIndex?: number;
+  pinyinHint?: string;
 }
 
 export async function POST(
@@ -73,7 +74,7 @@ export async function POST(
 
   const rawTurns = await runAgentTurnsWithRetry(
     agents.map((agent) => agent.id),
-    { roundIndex, hint, previousGuesses: [] },
+    { roundIndex, hint, pinyinHint: body.pinyinHint ?? undefined, previousGuesses: [] },
     client,
     { timeoutMs: 15000, maxRetries: 1 }
   );

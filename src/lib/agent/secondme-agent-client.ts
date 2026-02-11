@@ -81,12 +81,17 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
       select: { userId: true }
     });
 
-    // Build the pinyin initials from the hint
-    const pinyinInitials = context.hint
-      .replace(/_/g, '')
-      .toUpperCase();
+    // Build the pinyin initials from pinyinHint (preferred) or hint (fallback)
+    const pinyinInitials = context.pinyinHint
+      ? context.pinyinHint.toUpperCase()
+      : context.hint.replace(/_/g, '').toUpperCase();
 
-    const prompt = `我想和你玩一个游戏，我说词语的首个拼音，你来猜词语。比如我说"PY"，你可以猜"朋友"。现在游戏开始，"${pinyinInitials}"，你来猜词语，请直接回复你猜的词语。`;
+    // Expected word length: use pinyinHint length if available, otherwise hint length
+    const expectedLength = context.pinyinHint
+      ? context.pinyinHint.length
+      : pinyinInitials.length;
+
+    const prompt = `我想和你玩一个游戏，我说词语的拼音首字母，你来猜对应的中文词语。比如我说"PY"，你可以猜"朋友"；我说"CF"，你可以猜"吃饭"。注意：你猜的词语字数必须和拼音字母数一致。现在游戏开始，"${pinyinInitials}"，请直接回复你猜的${expectedLength}个字的中文词语，不要加任何解释。`;
 
     // Get existing session ID for continuity
     let sessionId: string | undefined;
@@ -105,8 +110,6 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
     }
 
     // Extract the guessed word from the response
-    // The hint length (without underscores) indicates expected word length
-    const expectedLength = pinyinInitials.length;
     const extracted = extractGuessWord(result.content, expectedLength);
 
     return extracted || result.content.trim();

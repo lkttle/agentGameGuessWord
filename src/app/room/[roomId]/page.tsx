@@ -118,65 +118,57 @@ function getAvatarGradient(index: number): string {
 /* ----------------------------------------------------------------
    TTS Helper - auto-play agent responses
    ---------------------------------------------------------------- */
-let audioUnlocked = false;
 const ttsQueue: Array<() => Promise<void>> = [];
-let ttsPlaying = false;
+let ttsProcessing = false;
 
-function unlockAudio() {
-  if (audioUnlocked) return;
-  // Play a silent buffer to unlock audio on iOS/Safari
-  const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-  const buffer = ctx.createBuffer(1, 1, 22050);
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(ctx.destination);
-  source.start(0);
-  audioUnlocked = true;
-}
-
-if (typeof window !== 'undefined') {
-  const unlockEvents = ['click', 'touchstart', 'keydown'];
-  const onUnlock = () => {
-    unlockAudio();
-    unlockEvents.forEach(e => document.removeEventListener(e, onUnlock));
-  };
-  unlockEvents.forEach(e => document.addEventListener(e, onUnlock, { once: false }));
-}
-
-async function processTtsQueue() {
-  if (ttsPlaying || ttsQueue.length === 0) return;
-  ttsPlaying = true;
+async function drainTtsQueue() {
+  if (ttsProcessing) return;
+  ttsProcessing = true;
   while (ttsQueue.length > 0) {
     const task = ttsQueue.shift();
-    if (task) await task();
+    if (task) {
+      try { await task(); } catch { /* ignore */ }
+    }
   }
-  ttsPlaying = false;
+  ttsProcessing = false;
 }
 
 async function playTTS(text: string, userId?: string | null) {
-  const task = async () => {
+  ttsQueue.push(async () => {
     try {
       const body: Record<string, string> = { text, emotion: 'happy' };
       if (userId) body.userId = userId;
-      const res = await api<{ code: number; data: { url: string } }>('/api/secondme/tts', {
+      const res = await fetch('/api/secondme/tts', {
         method: 'POST',
-        body: JSON.stringify(body)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        cache: 'no-store'
       });
-      if (res.data?.url) {
-        const audio = new Audio(res.data.url);
-        audio.volume = 0.7;
-        await new Promise<void>((resolve) => {
-          audio.onended = () => resolve();
-          audio.onerror = () => resolve();
-          audio.play().catch(() => resolve());
+      if (!res.ok) return;
+      const json = await res.json();
+      const url = json?.data?.url;
+      if (!url) return;
+      const audio = new Audio(url);
+      audio.volume = 0.7;
+      await new Promise<void>((resolve) => {
+        audio.onended = () => resolve();
+        audio.onerror = () => resolve();
+        // Set a max wait of 10s so queue doesn't stall
+        const fallbackTimer = setTimeout(() => resolve(), 10000);
+        audio.play().then(() => {
+          // playing successfully
+        }).catch(() => {
+          clearTimeout(fallbackTimer);
+          resolve();
         });
-      }
+        audio.onended = () => { clearTimeout(fallbackTimer); resolve(); };
+        audio.onerror = () => { clearTimeout(fallbackTimer); resolve(); };
+      });
     } catch {
-      // TTS is best-effort, don't block game flow
+      // TTS is best-effort
     }
-  };
-  ttsQueue.push(task);
-  void processTtsQueue();
+  });
+  void drainTtsQueue();
 }
 
 /* ----------------------------------------------------------------
@@ -388,13 +380,14 @@ export default function RoomPage() {
     }
   }, [timeLeft, room?.status, isHost]);
 
-  // Per-turn 15s timer - start when match is running and not busy
+  // Per-turn 20s timer - start when match is running and not busy
   useEffect(() => {
     if (room?.status !== 'RUNNING' || !currentQuestion || !!busy) {
       if (turnTimerRef.current) clearInterval(turnTimerRef.current);
+      setTurnTimeLeft(null);
       return;
     }
-    setTurnTimeLeft(15);
+    setTurnTimeLeft(20);
     turnSkippingRef.current = false;
     turnTimerRef.current = setInterval(() => {
       setTurnTimeLeft(prev => {
@@ -447,6 +440,29 @@ export default function RoomPage() {
     }
   }, [match?.roundLogs, participants]);
 
+  // Auto-run agent rounds in AGENT_VS_AGENT mode
+  const autoAgentRunningRef = useRef(false);
+  useEffect(() => {
+    if (
+      room?.mode !== GAME_MODES.AGENT_VS_AGENT ||
+      room?.status !== 'RUNNING' ||
+      !isHost ||
+      !currentQuestion ||
+      !!busy ||
+      autoAgentRunningRef.current
+    ) return;
+    autoAgentRunningRef.current = true;
+    const delay = match?.roundLogs?.length ? 2000 : 500;
+    const timer = setTimeout(() => {
+      autoAgentRunningRef.current = false;
+      void handleAgentRound();
+    }, delay);
+    return () => {
+      clearTimeout(timer);
+      autoAgentRunningRef.current = false;
+    };
+  }, [room?.mode, room?.status, isHost, currentQuestion, busy, match?.roundLogs?.length]);
+
   async function runAction(label: string, action: () => Promise<void>) {
     try {
       setError('');
@@ -468,6 +484,7 @@ export default function RoomPage() {
         method: 'POST',
         body: JSON.stringify({
           targetWord: currentQuestion.answer,
+          pinyinHint: currentQuestion.initialsText,
           roundIndex: (match?.totalRounds ?? 0) + 1
         })
       });
@@ -495,6 +512,7 @@ export default function RoomPage() {
         method: 'POST',
         body: JSON.stringify({
           targetWord: currentQuestion.answer,
+          pinyinHint: currentQuestion.initialsText,
           roundIndex: (match?.totalRounds ?? 0) + 1
         })
       });
@@ -525,6 +543,7 @@ export default function RoomPage() {
           agentParticipantId: agentParticipants[0]?.id,
           autoAgentResponse: true,
           targetWord: currentQuestion!.answer,
+          pinyinHint: currentQuestion!.initialsText,
           guessWord: guessWord.trim()
         })
       });

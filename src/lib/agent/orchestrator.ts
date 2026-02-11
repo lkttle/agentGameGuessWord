@@ -3,6 +3,7 @@ import { executeWithTimeout } from '@/lib/game/guess-word-engine';
 export interface AgentTurnContext {
   roundIndex: number;
   hint: string;
+  pinyinHint?: string;
   previousGuesses: string[];
   instruction?: string;
 }
