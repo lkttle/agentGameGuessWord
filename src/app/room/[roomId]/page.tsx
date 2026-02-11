@@ -54,7 +54,6 @@ interface HumanMoveResponse {
     participantId: string;
     guessWord: string;
     usedFallback: boolean;
-    fromCache?: boolean;
     result: {
       isCorrect: boolean;
       scoreDelta: number;
@@ -81,16 +80,6 @@ interface RoomState {
   };
 }
 
-interface AgentRoundResponse {
-  roundIndex: number;
-  skipped?: boolean;
-  reason?: string;
-  turns?: Array<{
-    fromCache?: boolean;
-    isCorrect?: boolean;
-  }>;
-}
-
 interface SessionData {
   authenticated: boolean;
   user?: { id: string; name?: string | null };
@@ -102,19 +91,6 @@ interface PinyinQuestion {
   answer: string;
   category: string;
   questionKey?: string;
-}
-
-interface NextQuestionResponse {
-  question: PinyinQuestion;
-  debug?: {
-    queuePending?: number;
-  };
-}
-
-interface DebugEvent {
-  time: string;
-  type: string;
-  payload?: Record<string, unknown>;
 }
 
 /* ----------------------------------------------------------------
@@ -269,11 +245,6 @@ function ttsClientDebugEnabled(): boolean {
   return window.localStorage.getItem('ttsDebug') === '1' || process.env.NEXT_PUBLIC_TTS_DEBUG === '1';
 }
 
-function roomDebugEnabled(): boolean {
-  if (typeof window === 'undefined') return process.env.NEXT_PUBLIC_ROOM_DEBUG === '1';
-  return window.localStorage.getItem('roomDebug') === '1' || process.env.NEXT_PUBLIC_ROOM_DEBUG === '1';
-}
-
 function ttsClientLog(event: string, payload?: Record<string, unknown>): void {
   if (!ttsClientDebugEnabled()) return;
   if (payload) {
@@ -281,19 +252,6 @@ function ttsClientLog(event: string, payload?: Record<string, unknown>): void {
     return;
   }
   console.info(`[tts][client] ${event}`);
-}
-
-function emitRoomDebugEvent(event: string, payload?: Record<string, unknown>): void {
-  if (typeof window === 'undefined') return;
-  window.dispatchEvent(
-    new CustomEvent('room-debug-event', {
-      detail: {
-        event,
-        payload: payload ?? null,
-        time: Date.now()
-      }
-    })
-  );
 }
 
 function sleep(ms: number): Promise<void> {
@@ -381,11 +339,6 @@ async function playTTS(
           textLength: text.length,
           textPreview: text.slice(0, 40)
         });
-        emitRoomDebugEvent('tts_request_start', {
-          participantId: options?.participantId ?? null,
-          questionKey: options?.questionKey ?? null,
-          textLength: text.length
-        });
 
         const body: Record<string, string> = { text, emotion: 'happy' };
         if (options?.userId) body.userId = options.userId;
@@ -415,12 +368,6 @@ async function playTTS(
             statusText: res.statusText,
             detail
           });
-          emitRoomDebugEvent('tts_request_http_failed', {
-            status: res.status,
-            statusText: res.statusText,
-            participantId: options?.participantId ?? null,
-            questionKey: options?.questionKey ?? null
-          });
           return settle(false);
         }
 
@@ -431,25 +378,14 @@ async function playTTS(
           return settle(false);
         }
 
-        ttsClientLog('request_success', {
+      ttsClientLog('request_success', {
           requestId: json?.requestId ?? res.headers.get('x-tts-request-id') ?? null,
           hasUrl: Boolean(url),
           durationMs: json?.data?.durationMs ?? null,
           cacheHit: json?.cacheHit === true
         });
-        emitRoomDebugEvent('tts_request_success', {
-          requestId: json?.requestId ?? res.headers.get('x-tts-request-id') ?? null,
-          participantId: options?.participantId ?? null,
-          questionKey: options?.questionKey ?? null,
-          cacheHit: json?.cacheHit === true,
-          hasUrl: Boolean(url)
-        });
         if (!url) {
           ttsClientLog('request_missing_url', { response: json });
-          emitRoomDebugEvent('tts_request_missing_url', {
-            participantId: options?.participantId ?? null,
-            questionKey: options?.questionKey ?? null
-          });
           return settle(false);
         }
 
@@ -524,10 +460,6 @@ async function playTTS(
             ttsClientLog('audio_onended', {
               participantId: options?.participantId ?? null
             });
-            emitRoomDebugEvent('tts_audio_ended', {
-              participantId: options?.participantId ?? null,
-              questionKey: options?.questionKey ?? null
-            });
             audioResolve(true);
           };
           audio.onerror = () => {
@@ -542,11 +474,6 @@ async function playTTS(
             }
             ttsClientLog('audio_onerror', {
               participantId: options?.participantId ?? null,
-              url
-            });
-            emitRoomDebugEvent('tts_audio_error', {
-              participantId: options?.participantId ?? null,
-              questionKey: options?.questionKey ?? null,
               url
             });
             audioResolve(false);
@@ -571,12 +498,6 @@ async function playTTS(
               audioUnlocked,
               error: error instanceof Error ? error.message : String(error)
             });
-            emitRoomDebugEvent('tts_audio_play_rejected', {
-              participantId: options?.participantId ?? null,
-              questionKey: options?.questionKey ?? null,
-              audioUnlocked,
-              error: error instanceof Error ? error.message : String(error)
-            });
             audioResolve(false);
           });
         });
@@ -586,11 +507,6 @@ async function playTTS(
         ttsClientLog('request_exception', {
           error: error instanceof Error ? error.message : String(error),
           participantId: options?.participantId ?? null
-        });
-        emitRoomDebugEvent('tts_request_exception', {
-          participantId: options?.participantId ?? null,
-          questionKey: options?.questionKey ?? null,
-          error: error instanceof Error ? error.message : String(error)
         });
         if (activeAudioElement) {
           activeAudioElement.pause();
@@ -714,21 +630,6 @@ export default function RoomPage() {
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [timerStarted, setTimerStarted] = useState(false);
   const [turnTimeLeft, setTurnTimeLeft] = useState<number | null>(null);
-  const [debugEnabled, setDebugEnabled] = useState(false);
-  const [debugCollapsed, setDebugCollapsed] = useState(true);
-  const [debugEvents, setDebugEvents] = useState<DebugEvent[]>([]);
-  const [debugStats, setDebugStats] = useState({
-    questionFetchCount: 0,
-    questionQueuePending: 0,
-    agentRoundCalls: 0,
-    humanMoveCalls: 0,
-    ttsRequestCount: 0,
-    ttsCacheHitCount: 0,
-    revealQueuedCount: 0,
-    revealPlayedCount: 0,
-    staleQuestionSkipCount: 0,
-    apiErrorCount: 0
-  });
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const turnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -755,67 +656,6 @@ export default function RoomPage() {
   const currentQuestionKeyRef = useRef('');
   const [revealedAgentLogIds, setRevealedAgentLogIds] = useState<string[]>([]);
 
-  useEffect(() => {
-    const enabled = roomDebugEnabled();
-    setDebugEnabled(enabled);
-    setDebugCollapsed(!enabled);
-  }, []);
-
-  const pushDebugEvent = useCallback((type: string, payload?: Record<string, unknown>) => {
-    if (!debugEnabled) return;
-    setDebugEvents((prev) => {
-      const next: DebugEvent[] = [
-        {
-          time: new Date().toISOString(),
-          type,
-          payload
-        },
-        ...prev
-      ];
-      return next.slice(0, 60);
-    });
-  }, [debugEnabled]);
-
-  const bumpDebugStat = useCallback((key: keyof typeof debugStats, delta = 1) => {
-    if (!debugEnabled) return;
-    setDebugStats((prev) => ({
-      ...prev,
-      [key]: Math.max(0, prev[key] + delta)
-    }));
-  }, [debugEnabled]);
-
-  useEffect(() => {
-    if (!debugEnabled) return;
-
-    const onRoomDebugEvent = (event: Event) => {
-      const custom = event as CustomEvent<{ event: string; payload?: Record<string, unknown>; time?: number }>;
-      const eventType = custom.detail?.event ?? 'unknown';
-      const payload = custom.detail?.payload;
-
-      if (eventType === 'tts_request_start') {
-        bumpDebugStat('ttsRequestCount');
-      }
-      if (eventType === 'tts_request_success' && payload?.cacheHit === true) {
-        bumpDebugStat('ttsCacheHitCount');
-      }
-      if (
-        eventType === 'tts_request_http_failed' ||
-        eventType === 'tts_request_exception' ||
-        eventType === 'tts_audio_error' ||
-        eventType === 'tts_audio_play_rejected'
-      ) {
-        bumpDebugStat('apiErrorCount');
-      }
-
-      pushDebugEvent(eventType, payload);
-    };
-
-    window.addEventListener('room-debug-event', onRoomDebugEvent as EventListener);
-    return () => {
-      window.removeEventListener('room-debug-event', onRoomDebugEvent as EventListener);
-    };
-  }, [bumpDebugStat, debugEnabled, pushDebugEvent]);
-
   const revealAgentLog = useCallback((logId: string) => {
     if (revealedAgentLogIdsRef.current.has(logId)) return;
     revealedAgentLogIdsRef.current.add(logId);
@@ -838,11 +678,6 @@ export default function RoomPage() {
         participantId: next.participantId ?? null,
         queueLeft: revealQueueRef.current.length
       });
-      pushDebugEvent('reveal_next', {
-        logId: next.id,
-        participantId: next.participantId ?? null,
-        queueLeft: revealQueueRef.current.length
-      });
       revealAgentLog(next.id);
       const played = await playTTSWithRetry(next.text, {
         userId: next.userId,
@@ -850,13 +685,7 @@ export default function RoomPage() {
         questionKey: next.questionKey
       });
       playedAgentLogIdsRef.current.add(next.id);
-      bumpDebugStat('revealPlayedCount');
       ttsClientLog('reveal_tts_result', {
-        logId: next.id,
-        participantId: next.participantId ?? null,
-        played
-      });
-      pushDebugEvent('reveal_tts_result', {
         logId: next.id,
         participantId: next.participantId ?? null,
         played
@@ -867,7 +696,7 @@ export default function RoomPage() {
 
     revealProcessingRef.current = false;
     ttsClientLog('reveal_queue_end');
-  }, [bumpDebugStat, pushDebugEvent, revealAgentLog]);
+  }, [revealAgentLog]);
 
   // Compute scores from round logs
   const scores = new Map<string, number>();
@@ -907,17 +736,10 @@ export default function RoomPage() {
       const data = await api<RoomState>(`/api/rooms/${roomId}/state`);
       if (!pageActiveRef.current) return;
       setRoomState(data);
-      pushDebugEvent('fetch_room_success', {
-        status: data.room.status,
-        totalRounds: data.room.match?.totalRounds ?? 0,
-        roundLogs: data.room.match?.roundLogs?.length ?? 0
-      });
     } catch {
       // Silently handle polling errors
-      bumpDebugStat('apiErrorCount');
-      pushDebugEvent('fetch_room_error');
     }
-  }, [bumpDebugStat, pushDebugEvent, roomId]);
+  }, [roomId]);
 
   // Fetch a new question from the API
   const fetchQuestion = useCallback(async () => {
@@ -929,25 +751,13 @@ export default function RoomPage() {
     stopAllTTSPlayback();
 
     try {
-      bumpDebugStat('questionFetchCount');
-      const res = await api<NextQuestionResponse>(`/api/matches/${match!.id}/next-question`, {
+      const res = await api<{ question: PinyinQuestion }>(`/api/matches/${match!.id}/next-question`, {
         method: 'POST',
         body: '{}'
       });
       if (!pageActiveRef.current) return;
       if (res.question) {
         setCurrentQuestion(res.question);
-        setDebugStats((prev) => ({
-          ...prev,
-          questionQueuePending: res.debug?.queuePending ?? prev.questionQueuePending
-        }));
-        pushDebugEvent('question_fetched', {
-          questionKey: res.question.questionKey ?? questionToKey(res.question),
-          initials: res.question.initialsText,
-          answer: res.question.answer,
-          category: res.question.category,
-          queuePending: res.debug?.queuePending ?? null
-        });
         setAnswerRevealText('');
         switchingQuestionRef.current = false;
         failedRoundsRef.current = 0;
@@ -955,8 +765,6 @@ export default function RoomPage() {
       }
     } catch {
       if (!pageActiveRef.current) return;
-      bumpDebugStat('apiErrorCount');
-      pushDebugEvent('question_fetch_error', { matchId: match?.id ?? null });
       setCurrentQuestion({
         initials: ['C', 'F'],
         initialsText: 'CF',
@@ -970,7 +778,7 @@ export default function RoomPage() {
     } finally {
       switchingQuestionRef.current = false;
     }
-  }, [bumpDebugStat, match?.id, pushDebugEvent]);
+  }, [match?.id]);
 
   const markFailedRoundAndMaybeSwitchQuestion = useCallback(async () => {
     if (!pageActiveRef.current) return;
@@ -1190,24 +998,17 @@ export default function RoomPage() {
         participantId: player.id,
         questionKey: currentQuestionKeyRef.current
       });
-      bumpDebugStat('revealQueuedCount');
       ttsClientLog('queue_push', {
         logId: log.id,
         participantId: player.id,
         queueLength: revealQueueRef.current.length
-      });
-      pushDebugEvent('reveal_queue_push', {
-        logId: log.id,
-        participantId: player.id,
-        queueLength: revealQueueRef.current.length,
-        questionKey: currentQuestionKeyRef.current
       });
     }
 
     if (revealQueueRef.current.length > 0) {
       void processRevealQueue();
     }
-  }, [bumpDebugStat, match?.roundLogs, participants, processRevealQueue, pushDebugEvent, revealAgentLog]);
+  }, [match?.roundLogs, participants, processRevealQueue, revealAgentLog]);
 
   useEffect(() => {
     revealedAgentLogIdsRef.current.clear();
@@ -1287,9 +1088,8 @@ export default function RoomPage() {
     const questionKey = currentQuestionKeyRef.current;
     if (!questionKey) return;
     const prevLogCount = match?.roundLogs?.length ?? 0;
-    bumpDebugStat('agentRoundCalls');
     const completed = await runAction('Agent 对战中...', async () => {
-      const response = await api<AgentRoundResponse>(`/api/matches/${match!.id}/agent-round`, {
+      await api(`/api/matches/${match!.id}/agent-round`, {
         method: 'POST',
         body: JSON.stringify({
           targetWord: currentQuestion.answer,
@@ -1298,20 +1098,6 @@ export default function RoomPage() {
           questionKey,
           roundIndex: (match?.totalRounds ?? 0) + 1
         })
-      });
-
-      const cacheHits = (response.turns ?? []).filter((turn) => turn.fromCache).length;
-      const correct = (response.turns ?? []).some((turn) => turn.isCorrect);
-      if (response.skipped) {
-        bumpDebugStat('staleQuestionSkipCount');
-      }
-      pushDebugEvent('agent_round_only', {
-        roundIndex: response.roundIndex,
-        turnCount: response.turns?.length ?? 0,
-        cacheHits,
-        anyCorrect: correct,
-        skipped: response.skipped === true,
-        reason: response.reason ?? null
       });
     });
     if (!completed || !pageActiveRef.current) return;
@@ -1335,9 +1121,8 @@ export default function RoomPage() {
     const questionKey = currentQuestionKeyRef.current;
     if (!questionKey) return;
     const prevLogCount = match?.roundLogs?.length ?? 0;
-    bumpDebugStat('agentRoundCalls');
     const completed = await runAction('超时！Agent 回合中...', async () => {
-      const response = await api<AgentRoundResponse>(`/api/matches/${match!.id}/agent-round`, {
+      await api(`/api/matches/${match!.id}/agent-round`, {
         method: 'POST',
         body: JSON.stringify({
           targetWord: currentQuestion.answer,
@@ -1346,20 +1131,6 @@ export default function RoomPage() {
           questionKey,
           roundIndex: (match?.totalRounds ?? 0) + 1
         })
-      });
-
-      const cacheHits = (response.turns ?? []).filter((turn) => turn.fromCache).length;
-      const correct = (response.turns ?? []).some((turn) => turn.isCorrect);
-      if (response.skipped) {
-        bumpDebugStat('staleQuestionSkipCount');
-      }
-      pushDebugEvent('agent_round_timeout', {
-        roundIndex: response.roundIndex,
-        turnCount: response.turns?.length ?? 0,
-        cacheHits,
-        anyCorrect: correct,
-        skipped: response.skipped === true,
-        reason: response.reason ?? null
       });
     });
     if (!completed || !pageActiveRef.current) return;
@@ -1394,7 +1165,6 @@ export default function RoomPage() {
     let humanMoveResult: HumanMoveResponse;
 
     try {
-      bumpDebugStat('humanMoveCalls');
       humanMoveResult = await api<HumanMoveResponse>(`/api/matches/${match!.id}/human-move`, {
         method: 'POST',
         body: JSON.stringify({
@@ -1408,21 +1178,7 @@ export default function RoomPage() {
         })
       });
 
-      pushDebugEvent('human_move_result', {
-        roundIndex: humanMoveResult.roundIndex,
-        humanCorrect: humanMoveResult.human.result.isCorrect,
-        returnedAgentTurns: humanMoveResult.agents?.length ?? 0,
-        cacheHits: (humanMoveResult.agents ?? []).filter((agent) => agent.fromCache).length,
-        skipped: humanMoveResult.skipped === true,
-        reason: humanMoveResult.reason ?? null
-      });
-
       if (humanMoveResult.skipped) {
-        bumpDebugStat('staleQuestionSkipCount');
-        pushDebugEvent('human_move_skipped_stale_question', {
-          reason: humanMoveResult.reason ?? null,
-          roundIndex: humanMoveResult.roundIndex
-        });
         await fetchRoom();
         return;
       }
@@ -1447,9 +1203,8 @@ export default function RoomPage() {
     }
 
     if (agentParticipants.length > 0) {
-      bumpDebugStat('agentRoundCalls');
       const completed = await runAction('Agent 回答中...', async () => {
-        const response = await api<AgentRoundResponse>(`/api/matches/${match!.id}/agent-round`, {
+        await api(`/api/matches/${match!.id}/agent-round`, {
           method: 'POST',
           body: JSON.stringify({
             targetWord: currentQuestion.answer,
@@ -1458,18 +1213,6 @@ export default function RoomPage() {
             questionKey,
             roundIndex: humanMoveResult.roundIndex
           })
-        });
-
-        const cacheHits = (response.turns ?? []).filter((turn) => turn.fromCache).length;
-        if (response.skipped) {
-          bumpDebugStat('staleQuestionSkipCount');
-        }
-        pushDebugEvent('agent_round_after_human', {
-          roundIndex: response.roundIndex,
-          turnCount: response.turns?.length ?? 0,
-          cacheHits,
-          skipped: response.skipped === true,
-          reason: response.reason ?? null
         });
       });
       if (!completed || !pageActiveRef.current) return;
@@ -1536,36 +1279,6 @@ export default function RoomPage() {
     }
   }
 
-  const revealQueueLength = revealQueueRef.current.length;
-  const activeAgentCount = participants.filter((participant) => participant.participantType === PARTICIPANT_TYPES.AGENT).length;
-  const debugSummary = {
-    roomId,
-    roomStatus: room?.status ?? null,
-    matchId: match?.id ?? null,
-    matchTotalRounds: match?.totalRounds ?? 0,
-    participants: participants.length,
-    agents: activeAgentCount,
-    humans: participants.length - activeAgentCount,
-    currentQuestionKey: currentQuestionKeyRef.current || null,
-    currentQuestionInitials: currentQuestion?.initialsText ?? null,
-    currentQuestionAnswer: currentQuestion?.answer ?? null,
-    currentQuestionCategory: currentQuestion?.category ?? null,
-    failedRounds,
-    answerRevealText: answerRevealText || null,
-    isHost,
-    busy: busy || null,
-    isSubmitting,
-    turnTimeLeft,
-    totalTimeLeft: timeLeft,
-    revealQueueLength,
-    revealedAgentLogs: revealedAgentLogIds.length,
-    knownLogCount: knownLogIdsRef.current.size,
-    currentRoundLogCount: match?.roundLogs?.length ?? 0,
-    currentGuessInput: guessWord,
-    ttsSessionVersion,
-    audioUnlocked
-  };
-
   return (
     <div className="chatroom">
       <div className="chatroom__container">
@@ -1620,121 +1333,6 @@ export default function RoomPage() {
             />
           ))}
         </div>
-
-        {/* Debug Panel */}
-        {(debugEnabled || roomDebugEnabled()) && (
-          <div className="chatroom__debug-panel" style={{ marginBottom: 'var(--space-md)' }}>
-            <div
-              className="chatroom__debug-header"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-                marginBottom: debugCollapsed ? 0 : 8
-              }}
-            >
-              <div style={{ fontWeight: 700 }}>调试面板（Room）</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => {
-                    setDebugCollapsed((prev) => !prev);
-                  }}
-                >
-                  {debugCollapsed ? '展开' : '收起'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => {
-                    setDebugEvents([]);
-                    setDebugStats({
-                      questionFetchCount: 0,
-                      questionQueuePending: debugStats.questionQueuePending,
-                      agentRoundCalls: 0,
-                      humanMoveCalls: 0,
-                      ttsRequestCount: 0,
-                      ttsCacheHitCount: 0,
-                      revealQueuedCount: 0,
-                      revealPlayedCount: 0,
-                      staleQuestionSkipCount: 0,
-                      apiErrorCount: 0
-                    });
-                  }}
-                >
-                  清空
-                </button>
-              </div>
-            </div>
-
-            {!debugCollapsed && (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, marginBottom: 8 }}>
-                  <div className="chatroom__system-msg">题目请求: {debugStats.questionFetchCount}</div>
-                  <div className="chatroom__system-msg">题队列剩余: {debugStats.questionQueuePending}</div>
-                  <div className="chatroom__system-msg">Agent回合请求: {debugStats.agentRoundCalls}</div>
-                  <div className="chatroom__system-msg">玩家提交请求: {debugStats.humanMoveCalls}</div>
-                  <div className="chatroom__system-msg">TTS请求: {debugStats.ttsRequestCount}</div>
-                  <div className="chatroom__system-msg">TTS缓存命中: {debugStats.ttsCacheHitCount}</div>
-                  <div className="chatroom__system-msg">揭示入队: {debugStats.revealQueuedCount}</div>
-                  <div className="chatroom__system-msg">揭示已播: {debugStats.revealPlayedCount}</div>
-                  <div className="chatroom__system-msg">stale跳过: {debugStats.staleQuestionSkipCount}</div>
-                  <div className="chatroom__system-msg">API异常数: {debugStats.apiErrorCount}</div>
-                </div>
-
-                <details open style={{ marginBottom: 8 }}>
-                  <summary style={{ cursor: 'pointer', fontWeight: 600 }}>实时状态</summary>
-                  <pre
-                    style={{
-                      marginTop: 6,
-                      background: '#0f172a',
-                      color: '#e2e8f0',
-                      padding: 8,
-                      borderRadius: 8,
-                      fontSize: 12,
-                      overflowX: 'auto'
-                    }}
-                  >
-                    {JSON.stringify(debugSummary, null, 2)}
-                  </pre>
-                </details>
-
-                <details open>
-                  <summary style={{ cursor: 'pointer', fontWeight: 600 }}>最近事件（最多60条）</summary>
-                  <div
-                    style={{
-                      marginTop: 6,
-                      background: '#0f172a',
-                      color: '#e2e8f0',
-                      padding: 8,
-                      borderRadius: 8,
-                      fontSize: 12,
-                      maxHeight: 280,
-                      overflowY: 'auto'
-                    }}
-                  >
-                    {debugEvents.length === 0 ? (
-                      <div style={{ opacity: 0.75 }}>暂无事件</div>
-                    ) : (
-                      debugEvents.map((eventItem, index) => (
-                        <div key={`${eventItem.time}-${eventItem.type}-${index}`} style={{ marginBottom: 6 }}>
-                          <div style={{ fontWeight: 600 }}>
-                            {eventItem.time} · {eventItem.type}
-                          </div>
-                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                            {JSON.stringify(eventItem.payload ?? {}, null, 2)}
-                          </pre>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </details>
-              </>
-            )}
-          </div>
-        )}
 
         {/* Hint Display */}
         {room?.status === 'RUNNING' && currentQuestion && (

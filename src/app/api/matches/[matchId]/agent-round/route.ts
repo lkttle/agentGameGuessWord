@@ -105,7 +105,6 @@ export async function POST(
           participantId: agent.id,
           guessWord: cached.replyText,
           usedFallback: false,
-          fromCache: true,
           attempts: 1
         });
         continue;
@@ -126,14 +125,13 @@ export async function POST(
       { timeoutMs: 15000, maxRetries: 1 }
     );
 
-    rawTurns.push({ participantId: agent.id, fromCache: false, ...turn });
+    rawTurns.push({ participantId: agent.id, ...turn });
   }
 
   const turns: Array<{
     participantId: string;
     guessWord: string;
     usedFallback: boolean;
-    fromCache: boolean;
     attempts: number;
     isCorrect: boolean;
     scoreDelta: number;
@@ -159,7 +157,6 @@ export async function POST(
       participantId: turn.participantId ?? '',
       guessWord: rawResponse,
       usedFallback: turn.usedFallback,
-      fromCache: Boolean(turn.fromCache),
       attempts: turn.attempts,
       ...result
     });
