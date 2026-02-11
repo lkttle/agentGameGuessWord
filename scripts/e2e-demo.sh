@@ -48,7 +48,7 @@ A2A_START_JSON=$(curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/rooms/$A2A_RO
 A2A_MATCH_ID=$(printf '%s' "$A2A_START_JSON" | json_get "match.id")
 
 echo "[6/12] run A2A agent round"
-curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/matches/$A2A_MATCH_ID/agent-round" -H 'Content-Type: application/json' --data '{"targetWord":"apple","roundIndex":1}' | json_get "roundIndex" >/dev/null
+curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/matches/$A2A_MATCH_ID/agent-round" -H 'Content-Type: application/json' --data '{"targetWord":"吃饭","roundIndex":1}' | json_get "roundIndex" >/dev/null
 
 echo "[7/12] finish A2A room"
 curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/rooms/$A2A_ROOM_ID/finish" -H 'Content-Type: application/json' --data "{\"winnerUserId\":\"$HOST_USER_ID\",\"totalRounds\":1}" | json_get "room.status" >/dev/null
@@ -66,7 +66,7 @@ echo "[10/12] start HVA room and submit human move"
 HVA_START_JSON=$(curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/rooms/$HVA_ROOM_ID/start" -H 'Content-Type: application/json' --data '{}')
 HVA_MATCH_ID=$(printf '%s' "$HVA_START_JSON" | json_get "match.id")
 
-curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/matches/$HVA_MATCH_ID/human-move" -H 'Content-Type: application/json' --data "{\"participantId\":\"$HVA_HUMAN_ID\",\"agentParticipantId\":\"$HVA_AGENT_ID\",\"targetWord\":\"angle\",\"guessWord\":\"apple\",\"roundIndex\":1}" | json_get "roundIndex" >/dev/null
+curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/matches/$HVA_MATCH_ID/human-move" -H 'Content-Type: application/json' --data "{\"participantId\":\"$HVA_HUMAN_ID\",\"agentParticipantId\":\"$HVA_AGENT_ID\",\"targetWord\":\"吃饭\",\"guessWord\":\"出发\",\"roundIndex\":1}" | json_get "roundIndex" >/dev/null
 
 echo "[11/12] finish HVA room"
 curl -sS -b "$HOST_COOKIE" -X POST "$BASE_URL/api/rooms/$HVA_ROOM_ID/finish" -H 'Content-Type: application/json' --data "{\"winnerUserId\":\"$PLAYER_USER_ID\",\"totalRounds\":1}" | json_get "room.status" >/dev/null

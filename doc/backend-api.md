@@ -295,7 +295,7 @@ BASE_URL=http://localhost:3000 npm run e2e:demo
 
 ```json
 {
-  "targetWord": "apple",
+  "targetWord": "吃饭",
   "roundIndex": 1
 }
 ```
@@ -305,17 +305,17 @@ BASE_URL=http://localhost:3000 npm run e2e:demo
 ```json
 {
   "roundIndex": 1,
-  "hint": "a____",
+  "hint": "吃_",
   "turns": [
     {
       "participantId": "p1",
-      "guessWord": "agent",
+      "guessWord": "出发",
       "usedFallback": true,
       "attempts": 1,
       "isCorrect": false,
       "scoreDelta": 0,
-      "normalizedGuess": "agent",
-      "normalizedTarget": "apple",
+      "normalizedGuess": "出发",
+      "normalizedTarget": "吃饭",
       "timedOut": true
     }
   ]
@@ -327,10 +327,10 @@ BASE_URL=http://localhost:3000 npm run e2e:demo
   - `403 Only host can trigger agent round`
   - `404 Match not found`
   - `400 targetWord is required`
-  - `400 At least 2 agent participants required`
+  - `400 At least 1 agent participant required`
 
 ### 6.2 `POST /api/matches/:matchId/human-move`
-- 说明：人类出招，若未猜中可触发一手 agent 反击。
+- 说明：人类出招，若未猜中可触发一手或多手 agent 反击。
 - 鉴权：需要。
 - 请求：
 
@@ -338,8 +338,8 @@ BASE_URL=http://localhost:3000 npm run e2e:demo
 {
   "participantId": "humanParticipantId",
   "agentParticipantId": "agentParticipantId",
-  "targetWord": "angle",
-  "guessWord": "apple",
+  "targetWord": "吃饭",
+  "guessWord": "出发",
   "roundIndex": 1
 }
 ```
@@ -351,27 +351,29 @@ BASE_URL=http://localhost:3000 npm run e2e:demo
   "roundIndex": 1,
   "human": {
     "participantId": "...",
-    "guessWord": "apple",
+    "guessWord": "出发",
     "result": {
       "isCorrect": false,
       "scoreDelta": 0,
-      "normalizedGuess": "apple",
-      "normalizedTarget": "angle",
+      "normalizedGuess": "出发",
+      "normalizedTarget": "吃饭",
       "timedOut": false
     }
   },
-  "agent": {
-    "participantId": "...",
-    "guessWord": "agent",
-    "usedFallback": true,
-    "result": {
-      "isCorrect": false,
-      "scoreDelta": 0,
-      "normalizedGuess": "agent",
-      "normalizedTarget": "angle",
-      "timedOut": false
+  "agents": [
+    {
+      "participantId": "...",
+      "guessWord": "充分",
+      "usedFallback": false,
+      "result": {
+        "isCorrect": false,
+        "scoreDelta": 0,
+        "normalizedGuess": "充分",
+        "normalizedTarget": "吃饭",
+        "timedOut": false
+      }
     }
-  }
+  ]
 }
 ```
 
@@ -380,10 +382,48 @@ BASE_URL=http://localhost:3000 npm run e2e:demo
   - `404 Match not found`
   - `409 Match is not running`
   - `400 guessWord and targetWord are required`
-  - `400 Invalid guess format`
+  - `400 targetWord must be a 2-4 Chinese word`
+  - `400 guessWord must be a 2-4 Chinese word`
   - `403 Invalid human participant or out-of-turn action`
 
-### 6.3 `GET /api/matches/:matchId/result`
+### 6.3 `POST /api/questions/generate`
+- 说明：生成中文拼音首字母猜词题目（仅接口，不绑定前端流程）。
+- 鉴权：无（当前版本）。
+- 请求：
+
+```json
+{
+  "length": 2,
+  "category": "水果",
+  "count": 3
+}
+```
+
+- 字段约束：
+  - `length`：可选，仅允许 `2 | 3 | 4`
+  - `category`：可选，非空字符串
+  - `count`：可选，`1-20` 的整数
+
+- `200`：
+
+```json
+{
+  "questions": [
+    {
+      "initials": ["P", "G"],
+      "initialsText": "PG",
+      "answer": "苹果",
+      "category": "水果"
+    }
+  ]
+}
+```
+
+- 错误：
+  - `400` 请求参数非法（如 `length=5` / `count=0`）
+  - `422` 在筛选条件下无可用题目
+
+### 6.4 `GET /api/matches/:matchId/result`
 - 说明：获取战报数据（分享页接口）。
 - 鉴权：当前无需。
 - `200`：
@@ -501,4 +541,3 @@ BASE_URL=http://localhost:3000 npm run e2e:demo
    - `GET /api/matches/:matchId/result`
    - `GET /api/leaderboard`
    - `GET /api/metrics/summary`
-

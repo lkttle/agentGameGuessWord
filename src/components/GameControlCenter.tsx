@@ -152,8 +152,8 @@ export function GameControlCenter() {
 
   const [roomId, setRoomId] = useState('');
   const [matchId, setMatchId] = useState('');
-  const [targetWord, setTargetWord] = useState('apple');
-  const [guessWord, setGuessWord] = useState('angle');
+  const [targetWord, setTargetWord] = useState('吃饭');
+  const [guessWord, setGuessWord] = useState('出发');
   const [humanParticipantId, setHumanParticipantId] = useState('');
   const [agentParticipantId, setAgentParticipantId] = useState('');
   const [winnerUserId, setWinnerUserId] = useState('');

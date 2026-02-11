@@ -18,7 +18,7 @@ interface HumanMoveBody {
 }
 
 function isValidGuess(input: string): boolean {
-  return /^[a-zA-Z]{2,}$/.test(input);
+  return /^[\u4e00-\u9fff]{2,4}$/.test(input);
 }
 
 export async function POST(
@@ -50,14 +50,17 @@ export async function POST(
   }
 
   const body = (await request.json()) as HumanMoveBody;
-  const guessWord = body.guessWord?.trim().toLowerCase();
-  const targetWord = body.targetWord?.trim().toLowerCase();
+  const guessWord = body.guessWord?.trim();
+  const targetWord = body.targetWord?.trim();
 
   if (!guessWord || !targetWord) {
     return NextResponse.json({ error: 'guessWord and targetWord are required' }, { status: 400 });
   }
+  if (!isValidGuess(targetWord)) {
+    return NextResponse.json({ error: 'targetWord must be a 2-4 Chinese word' }, { status: 400 });
+  }
   if (!isValidGuess(guessWord)) {
-    return NextResponse.json({ error: 'Invalid guess format' }, { status: 400 });
+    return NextResponse.json({ error: 'guessWord must be a 2-4 Chinese word' }, { status: 400 });
   }
 
   const humanParticipant = match.room.participants.find(

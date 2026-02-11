@@ -84,7 +84,7 @@ function WordDisplay({ hint }: { hint: string }) {
   const letters = hint.split('');
   return (
     <div className="word-display">
-      <div className="word-display__label">Target Word Hint</div>
+      <div className="word-display__label">拼音首字母提示</div>
       <div className="word-display__letters">
         {letters.map((letter, i) => (
           <div
@@ -118,6 +118,7 @@ function PlayerCard({ participant, isHost, scores }: {
       ? 'SELF'
       : 'PLATFORM'
     : null;
+  const participantTypeLabel = participant.participantType === PARTICIPANT_TYPES.HUMAN ? '人类' : 'Agent';
 
   return (
     <div className="player-card">
@@ -125,14 +126,14 @@ function PlayerCard({ participant, isHost, scores }: {
       <div className="player-card__info">
         <div className="player-card__name">
           {participant.displayName}
-          {isHost && <span style={{ fontSize: '0.75rem', color: 'var(--color-accent)', marginLeft: '6px' }}>HOST</span>}
+          {isHost && <span style={{ fontSize: '0.75rem', color: 'var(--color-accent)', marginLeft: '6px' }}>房主</span>}
           {agentBadge && (
             <span style={{ fontSize: '0.72rem', color: 'var(--color-primary)', marginLeft: '6px' }}>
               {agentBadge}
             </span>
           )}
         </div>
-        <div className="player-card__type">{participant.participantType}</div>
+        <div className="player-card__type">{participantTypeLabel}</div>
       </div>
       <div className="player-card__score">{score}</div>
     </div>
@@ -149,7 +150,7 @@ export default function RoomPage() {
   const [session, setSession] = useState<SessionData | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
-  const [targetWord, setTargetWord] = useState('apple');
+  const [targetWord, setTargetWord] = useState('吃饭');
   const [guessWord, setGuessWord] = useState('');
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -211,20 +212,20 @@ export default function RoomPage() {
       await action();
       await fetchRoom();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      setError(err instanceof Error ? err.message : '操作失败，请稍后重试');
     } finally {
       setBusy('');
     }
   }
 
   async function handleStart() {
-    await runAction('Starting game...', async () => {
+    await runAction('开始对局中...', async () => {
       await api(`/api/rooms/${roomId}/start`, { method: 'POST', body: '{}' });
     });
   }
 
   async function handleAgentRound() {
-    await runAction('Running agent round...', async () => {
+    await runAction('Agent 回合进行中...', async () => {
       await api(`/api/matches/${match!.id}/agent-round`, {
         method: 'POST',
         body: JSON.stringify({ targetWord, roundIndex: (match?.totalRounds ?? 0) + 1 })
@@ -233,8 +234,8 @@ export default function RoomPage() {
   }
 
   async function handleHumanMove() {
-    if (!guessWord.trim()) { setError('Enter your guess'); return; }
-    await runAction('Submitting guess...', async () => {
+    if (!guessWord.trim()) { setError('请输入你猜测的中文词语'); return; }
+    await runAction('提交猜词中...', async () => {
       await api(`/api/matches/${match!.id}/human-move`, {
         method: 'POST',
         body: JSON.stringify({
@@ -252,7 +253,7 @@ export default function RoomPage() {
   async function handleFinish() {
     const winner = [...scores.entries()].sort((a, b) => b[1] - a[1])[0];
     const winnerParticipant = winner ? participants.find(p => p.id === winner[0]) : null;
-    await runAction('Finishing match...', async () => {
+    await runAction('结算对局中...', async () => {
       await api(`/api/rooms/${roomId}/finish`, {
         method: 'POST',
         body: JSON.stringify({
@@ -284,10 +285,10 @@ export default function RoomPage() {
         <div className="room-header__inner">
           <div className="room-header__info">
               <span className="room-header__mode">
-              {room?.mode === GAME_MODES.AGENT_VS_AGENT ? 'Multi-Agent Battle' : 'Human vs Agent'}
+              {room?.mode === GAME_MODES.AGENT_VS_AGENT ? '多 Agent 对战' : '人类 vs Agent'}
               </span>
-            <h1 className="room-header__title">Game Room</h1>
-            <span className="room-header__id">Room: {roomId}</span>
+            <h1 className="room-header__title">猜词对战房间</h1>
+            <span className="room-header__id">房间号：{roomId}</span>
           </div>
           <div className={`room-status-badge room-status-badge--${statusClass}`}>
             <span className="room-status-badge__dot" />
@@ -304,14 +305,17 @@ export default function RoomPage() {
             <span className="loading-spinner" /> {busy}
           </div>
         )}
+        <div className="alert alert--info mb-md">
+          玩法：根据拼音首字母猜中文词语。示例：<strong>CF</strong> 可对应「吃饭 / 充分 / 出发」。
+        </div>
 
         {/* WAITING State */}
         {room?.status === 'WAITING' && (
           <div className="waiting-state animate-fade-in">
             <div>
-              <h2 className="waiting-state__title">Waiting for Players</h2>
+              <h2 className="waiting-state__title">等待参与者加入</h2>
               <p className="waiting-state__desc">
-                Fast room created. Share room ID only if you want extra participants.
+                房间已创建。若需更多参与者，可分享房间号。
               </p>
             </div>
 
@@ -335,7 +339,7 @@ export default function RoomPage() {
               ))}
               {participants.length < 2 && (
                 <div className="player-card player-card--empty">
-                  Waiting for opponent...
+                  等待对手加入...
                 </div>
               )}
             </div>
@@ -347,12 +351,12 @@ export default function RoomPage() {
                 onClick={() => void handleStart()}
                 disabled={!!busy}
               >
-                Start Game
+                开始对局
               </button>
             )}
             {!isHost && (
               <p className="text-muted" style={{ fontSize: '0.9rem' }}>
-                Waiting for the host to start the game...
+                等待房主开始对局...
               </p>
             )}
           </div>
@@ -368,17 +372,17 @@ export default function RoomPage() {
               {/* Round Info */}
               <div className="round-info">
                 <div className="round-info__item">
-                  <div className="round-info__label">Round</div>
+                  <div className="round-info__label">回合</div>
                   <div className="round-info__value">{match.totalRounds || 1}</div>
                 </div>
                 <div className="round-info__item">
-                  <div className="round-info__label">Status</div>
+                  <div className="round-info__label">状态</div>
                   <div className="round-info__value" style={{ color: 'var(--color-success)' }}>
                     {match.status}
                   </div>
                 </div>
                 <div className="round-info__item">
-                  <div className="round-info__label">Mode</div>
+                  <div className="round-info__label">模式</div>
                   <div className="round-info__value">
                     {room.mode === GAME_MODES.AGENT_VS_AGENT ? 'A2A' : 'HvA'}
                   </div>
@@ -388,15 +392,15 @@ export default function RoomPage() {
               {/* Game Controls */}
               {isHost && (
                 <div className="card">
-                  <h3 style={{ marginBottom: 'var(--space-md)', fontSize: '1rem' }}>Game Controls</h3>
+                  <h3 style={{ marginBottom: 'var(--space-md)', fontSize: '1rem' }}>对局控制</h3>
                   <div className="form-group mb-md">
-                    <label className="form-label" htmlFor="target-word">Target Word</label>
+                    <label className="form-label" htmlFor="target-word">标准答案词语（2-4字）</label>
                     <input
                       id="target-word"
                       className="input"
                       value={targetWord}
                       onChange={e => setTargetWord(e.target.value.trim())}
-                      placeholder="Enter target word"
+                      placeholder="请输入答案词语，例如：吃饭"
                       style={{ fontFamily: 'var(--font-mono)' }}
                     />
                   </div>
@@ -408,7 +412,7 @@ export default function RoomPage() {
                       onClick={() => void handleAgentRound()}
                       disabled={!!busy}
                     >
-                      Run Multi-Agent Round
+                      运行多 Agent 回合
                     </button>
                   ) : (
                     <div style={{ display: 'grid', gap: 'var(--space-sm)' }}>
@@ -417,7 +421,7 @@ export default function RoomPage() {
                           className="input"
                           value={guessWord}
                           onChange={e => setGuessWord(e.target.value)}
-                          placeholder="Type your guess..."
+                          placeholder="输入你猜的中文词语"
                           onKeyDown={e => { if (e.key === 'Enter') void handleHumanMove(); }}
                         />
                         <button
@@ -426,7 +430,7 @@ export default function RoomPage() {
                           onClick={() => void handleHumanMove()}
                           disabled={!!busy}
                         >
-                          Guess
+                          提交猜词
                         </button>
                       </div>
                     </div>
@@ -438,7 +442,7 @@ export default function RoomPage() {
                     onClick={() => void handleFinish()}
                     disabled={!!busy}
                   >
-                    End Game & Settle
+                    结束对局并结算
                   </button>
                 </div>
               )}
@@ -448,7 +452,7 @@ export default function RoomPage() {
             <div className="arena__sidebar">
               {/* Players */}
               <div className="card">
-                <h3 style={{ marginBottom: 'var(--space-md)', fontSize: '1rem' }}>Players</h3>
+                <h3 style={{ marginBottom: 'var(--space-md)', fontSize: '1rem' }}>参与者</h3>
                 <div className="players-list">
                   {participants.map(p => (
                     <PlayerCard key={p.id} participant={p} isHost={p.userId === room.hostUserId} scores={scores} />
@@ -459,7 +463,7 @@ export default function RoomPage() {
               {/* Round Log */}
               {match.roundLogs && match.roundLogs.length > 0 && (
                 <div className="round-log">
-                  <div className="round-log__header">Round History</div>
+                  <div className="round-log__header">回合记录</div>
                   <div className="round-log__list">
                     {match.roundLogs.map((log) => {
                       const player = participants.find(p => p.id === log.participantId);
@@ -469,7 +473,7 @@ export default function RoomPage() {
                           <span className="round-log__player">{player?.displayName ?? '?'}</span>
                           <span className="round-log__word">{log.guessWord}</span>
                           <span className={`round-log__result ${log.isCorrect ? 'round-log__result--correct' : 'round-log__result--wrong'}`}>
-                            {log.isCorrect ? 'HIT' : 'MISS'}
+                            {log.isCorrect ? '命中' : '未中'}
                           </span>
                           <span className="round-log__score">
                             {log.scoreDelta > 0 ? `+${log.scoreDelta}` : log.scoreDelta}
@@ -488,8 +492,8 @@ export default function RoomPage() {
         {room?.status === 'FINISHED' && match && (
           <div className="waiting-state animate-fade-in">
             <div>
-              <h2 className="waiting-state__title">Game Over!</h2>
-              <p className="waiting-state__desc">The match has ended. Check the full results below.</p>
+              <h2 className="waiting-state__title">对局结束！</h2>
+              <p className="waiting-state__desc">可查看完整结果并继续下一局拼音猜词对战。</p>
             </div>
 
             <div className="players-list">
@@ -502,13 +506,13 @@ export default function RoomPage() {
 
             <div style={{ display: 'flex', gap: 'var(--space-md)', justifyContent: 'center', flexWrap: 'wrap' }}>
               <Link href={`/results/${match.id}`} className="btn btn--gradient btn--lg">
-                View Full Results
+                查看完整结果
               </Link>
               <Link href="/play" className="btn btn--secondary btn--lg">
-                Play Again
+                再来一局
               </Link>
               <Link href="/leaderboard" className="btn btn--ghost btn--lg">
-                Leaderboard
+                排行榜
               </Link>
             </div>
           </div>

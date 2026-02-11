@@ -59,7 +59,7 @@ const modeOptions: ModeOption[] = [
   },
   {
     key: PLAY_ENTRY_MODES.FAST_AGENT_ARENA,
-    title: '快节奏 Agent Arena',
+    title: '快节奏 Agent 对战',
     subtitle: '你参战 + Agent 对局，短平快高频开局',
     mode: GAME_MODES.AGENT_VS_AGENT,
     autoJoinSelfAgent: true,
@@ -181,11 +181,16 @@ function PlayContent() {
       <div className="lobby-header">
         <h1 className="section__title">极速开战</h1>
         <p className="section__desc">
-          年轻人短平快 Agent 游戏：选模式，点开战，立即进入房间。
+          中文拼音猜词对战：根据每个字的拼音首字母，猜常见中文词语。
         </p>
       </div>
 
-      <div className="alert alert--info mb-md">登录后默认使用账户身份，不再手动输入房间 ID 和显示名称。</div>
+      <div className="alert alert--info mb-md">
+        登录后默认使用账户身份，不再手动输入房间 ID 和显示名称。
+      </div>
+      <div className="alert alert--info mb-md">
+        玩法示例：拼音首字母 <strong>CF</strong> 可以对应「吃饭 / 充分 / 出发」。
+      </div>
 
       {error && <div className="alert alert--error mb-md">{error}</div>}
       {busy && (
