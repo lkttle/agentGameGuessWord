@@ -10,7 +10,7 @@ import {
 } from '@/lib/game/guess-word-engine';
 import {
   FallbackAgentTurnClient,
-  runAgentTurnsWithRetry
+  runAgentTurnWithRetry
 } from '@/lib/agent/orchestrator';
 import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
 
@@ -132,19 +132,25 @@ export async function POST(
       client = new FallbackAgentTurnClient();
     }
     const previousGuesses = [guessWord];
-    const rawTurns = await runAgentTurnsWithRetry(
-      selectedAgent.map((participant) => participant.id),
-      {
-        roundIndex,
-        hint: `${targetWord[0]}${'_'.repeat(Math.max(targetWord.length - 1, 0))}`,
-        pinyinHint: body.pinyinHint ?? undefined,
-        categoryHint: body.categoryHint?.trim() || undefined,
-        questionKey: body.questionKey?.trim() || undefined,
-        previousGuesses: [...previousGuesses]
-      },
-      client,
-      { timeoutMs: 15000, maxRetries: 1 }
-    );
+    const rawTurns = [];
+
+    for (const participant of selectedAgent) {
+      const turn = await runAgentTurnWithRetry(
+        participant.id,
+        {
+          roundIndex,
+          hint: `${targetWord[0]}${'_'.repeat(Math.max(targetWord.length - 1, 0))}`,
+          pinyinHint: body.pinyinHint ?? undefined,
+          categoryHint: body.categoryHint?.trim() || undefined,
+          questionKey: body.questionKey?.trim() || undefined,
+          previousGuesses: [...previousGuesses]
+        },
+        client,
+        { timeoutMs: 15000, maxRetries: 1 }
+      );
+
+      rawTurns.push({ participantId: participant.id, ...turn });
+    }
 
     for (let index = 0; index < rawTurns.length; index += 1) {
       const turn = rawTurns[index];
@@ -165,6 +171,11 @@ export async function POST(
         usedFallback: turn.usedFallback,
         result
       });
+
+      previousGuesses.push(extractedWord || rawResponse);
+      if (result.isCorrect) {
+        break;
+      }
     }
   }
 

@@ -10,7 +10,7 @@ import {
 } from '@/lib/game/guess-word-engine';
 import {
   FallbackAgentTurnClient,
-  runAgentTurnsWithRetry
+  runAgentTurnWithRetry
 } from '@/lib/agent/orchestrator';
 import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
 
@@ -92,19 +92,26 @@ export async function POST(
     client = new FallbackAgentTurnClient();
   }
 
-  const rawTurns = await runAgentTurnsWithRetry(
-    agents.map((agent) => agent.id),
-    {
-      roundIndex,
-      hint,
-      pinyinHint: body.pinyinHint ?? undefined,
-      categoryHint: body.categoryHint?.trim() || undefined,
-      questionKey: body.questionKey?.trim() || undefined,
-      previousGuesses: []
-    },
-    client,
-    { timeoutMs: 15000, maxRetries: 1 }
-  );
+  const rawTurns = [];
+  const previousGuesses: string[] = [];
+
+  for (const agent of agents) {
+    const turn = await runAgentTurnWithRetry(
+      agent.id,
+      {
+        roundIndex,
+        hint,
+        pinyinHint: body.pinyinHint ?? undefined,
+        categoryHint: body.categoryHint?.trim() || undefined,
+        questionKey: body.questionKey?.trim() || undefined,
+        previousGuesses: [...previousGuesses]
+      },
+      client,
+      { timeoutMs: 15000, maxRetries: 1 }
+    );
+
+    rawTurns.push({ participantId: agent.id, ...turn });
+  }
 
   const turns: Array<{
     participantId: string;
@@ -138,6 +145,11 @@ export async function POST(
       attempts: turn.attempts,
       ...result
     });
+
+    previousGuesses.push(extractedWord || rawResponse);
+    if (result.isCorrect) {
+      break;
+    }
   }
 
   await prisma.$transaction(async (tx) => {
