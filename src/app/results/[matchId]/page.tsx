@@ -4,17 +4,39 @@ interface MatchResultPageProps {
   params: Promise<{ matchId: string }>;
 }
 
-async function getResult(matchId: string) {
+interface ParticipantResult {
+  participantId: string;
+  displayName: string;
+  participantType: string;
+  score: number;
+  correctCount: number;
+}
+
+interface MatchResult {
+  matchId: string;
+  roomId: string;
+  status: string;
+  winnerUserId: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  totalRounds: number;
+  participants: ParticipantResult[];
+}
+
+async function getResult(matchId: string): Promise<MatchResult | null> {
   const baseUrl = process.env.APP_BASE_URL ?? 'http://localhost:3000';
-  const response = await fetch(`${baseUrl}/api/matches/${matchId}/result`, {
-    cache: 'no-store'
-  });
+  const res = await fetch(`${baseUrl}/api/matches/${matchId}/result`, { cache: 'no-store' });
+  if (!res.ok) return null;
+  return res.json();
+}
 
-  if (!response.ok) {
-    return null;
-  }
-
-  return response.json();
+function CrownIcon() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L20.266 6.5a.5.5 0 0 1 .734.44v8.56a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6.94a.5.5 0 0 1 .734-.44l3.36 2.664a1 1 0 0 0 1.516-.294z" />
+      <path d="M3 17.5h18v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  );
 }
 
 export default async function MatchResultPage({ params }: MatchResultPageProps) {
@@ -23,103 +45,118 @@ export default async function MatchResultPage({ params }: MatchResultPageProps) 
 
   if (!result) {
     return (
-      <main className="result-page">
-        <section className="result-header">
-          <h1>战报不存在</h1>
-          <p>未找到对应对局结果，请确认 `matchId` 是否正确。</p>
-        </section>
+      <main>
+        <div className="results-hero">
+          <div className="results-hero__inner">
+            <h1 className="results-hero__title">Match Not Found</h1>
+            <p className="results-hero__subtitle">
+              Could not find results for this match. Please check the match ID.
+            </p>
+          </div>
+        </div>
+        <div className="results-body">
+          <div className="results-actions">
+            <Link href="/" className="btn btn--primary">Back to Home</Link>
+          </div>
+        </div>
       </main>
     );
   }
 
-  const topParticipant = [...result.participants].sort(
+  const sorted = [...result.participants].sort(
     (a, b) => b.score - a.score || b.correctCount - a.correctCount
-  )[0];
+  );
+  const winner = sorted[0];
 
   return (
-    <main className="result-page">
-      <section className="result-header">
-        <h1>对局战报</h1>
-        <p>分享你的 A2A 猜词表现，展示 Agent 推理与对战结果。</p>
-      </section>
+    <main className="results-page">
+      {/* Hero */}
+      <div className="results-hero">
+        <div className="results-hero__inner">
+          <div className="results-hero__badge">Match Complete</div>
+          <h1 className="results-hero__title">Battle Report</h1>
+          <p className="results-hero__subtitle">
+            A2A Guess Word match results and performance breakdown
+          </p>
+        </div>
+      </div>
 
-      <section className="meta-grid" aria-label="result metadata">
-        <article className="meta-item">
-          <span>Match ID</span>
-          <strong>{result.matchId}</strong>
-        </article>
-        <article className="meta-item">
-          <span>Room ID</span>
-          <strong>{result.roomId}</strong>
-        </article>
-        <article className="meta-item">
-          <span>状态</span>
-          <strong>{result.status}</strong>
-        </article>
-        <article className="meta-item">
-          <span>总回合</span>
-          <strong>{result.totalRounds}</strong>
-        </article>
-      </section>
+      {/* Body */}
+      <div className="results-body">
+        {/* Winner Card */}
+        {winner && (
+          <div className="winner-card animate-slide-up">
+            <div className="winner-card__crown">
+              <CrownIcon />
+            </div>
+            <h2 className="winner-card__name">{winner.displayName}</h2>
+            <div className="winner-card__score">{winner.score} pts</div>
+            <div className="winner-card__label">
+              {winner.correctCount} correct guesses &middot; {winner.participantType}
+            </div>
+          </div>
+        )}
 
-      <section className="meta-grid" aria-label="winner metadata">
-        <article className="meta-item">
-          <span>最高分</span>
-          <strong>{topParticipant?.displayName ?? '-'}</strong>
-        </article>
-        <article className="meta-item">
-          <span>胜者用户</span>
-          <strong>{result.winnerUserId ?? '未指定'}</strong>
-        </article>
-        <article className="meta-item">
-          <span>开始时间</span>
-          <strong>{new Date(result.startedAt).toLocaleString('zh-CN')}</strong>
-        </article>
-        <article className="meta-item">
-          <span>结束时间</span>
-          <strong>{result.endedAt ? new Date(result.endedAt).toLocaleString('zh-CN') : '进行中'}</strong>
-        </article>
-      </section>
+        {/* Match Meta */}
+        <div className="match-meta animate-slide-up" style={{ animationDelay: '0.1s' }}>
+          <div className="match-meta__item">
+            <div className="match-meta__label">Status</div>
+            <div className="match-meta__value">{result.status}</div>
+          </div>
+          <div className="match-meta__item">
+            <div className="match-meta__label">Total Rounds</div>
+            <div className="match-meta__value">{result.totalRounds}</div>
+          </div>
+          <div className="match-meta__item">
+            <div className="match-meta__label">Started</div>
+            <div className="match-meta__value" style={{ fontSize: '0.85rem' }}>
+              {new Date(result.startedAt).toLocaleString('zh-CN')}
+            </div>
+          </div>
+          <div className="match-meta__item">
+            <div className="match-meta__label">Ended</div>
+            <div className="match-meta__value" style={{ fontSize: '0.85rem' }}>
+              {result.endedAt ? new Date(result.endedAt).toLocaleString('zh-CN') : 'In Progress'}
+            </div>
+          </div>
+        </div>
 
-      <section className="participant-table" aria-label="participants performance">
-        <table>
-          <thead>
-            <tr>
-              <th>参与者</th>
-              <th>类型</th>
-              <th>分数</th>
-              <th>命中次数</th>
-            </tr>
-          </thead>
-          <tbody>
-            {result.participants.map(
-              (item: {
-                participantId: string;
-                displayName: string;
-                participantType: string;
-                score: number;
-                correctCount: number;
-              }) => (
-                <tr key={item.participantId}>
-                  <td>{item.displayName}</td>
-                  <td>{item.participantType}</td>
-                  <td>{item.score}</td>
-                  <td>{item.correctCount}</td>
+        {/* Participants Table */}
+        <div className="participants-card animate-slide-up" style={{ animationDelay: '0.2s' }}>
+          <div className="participants-card__header">All Participants</div>
+          <table className="participants-table">
+            <thead>
+              <tr>
+                <th>Player</th>
+                <th>Type</th>
+                <th>Score</th>
+                <th>Correct</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((p) => (
+                <tr key={p.participantId}>
+                  <td className="participants-table__name">{p.displayName}</td>
+                  <td>
+                    <span className={`participants-table__type participants-table__type--${p.participantType.toLowerCase()}`}>
+                      {p.participantType}
+                    </span>
+                  </td>
+                  <td className="participants-table__score">{p.score}</td>
+                  <td>{p.correctCount}</td>
                 </tr>
-              )
-            )}
-          </tbody>
-        </table>
-      </section>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
-      <section className="result-actions">
-        <Link className="btn-primary" href="/">
-          返回控制台
-        </Link>
-        <a className="btn-secondary" href={`/api/matches/${result.matchId}/result`}>
-          查看 JSON
-        </a>
-      </section>
+        {/* Actions */}
+        <div className="results-actions animate-slide-up" style={{ animationDelay: '0.3s' }}>
+          <Link href="/play" className="btn btn--primary btn--lg">Play Again</Link>
+          <Link href="/leaderboard" className="btn btn--secondary btn--lg">Leaderboard</Link>
+          <Link href="/" className="btn btn--ghost btn--lg">Home</Link>
+        </div>
+      </div>
     </main>
   );
 }
