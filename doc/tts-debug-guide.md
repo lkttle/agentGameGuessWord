@@ -84,6 +84,17 @@ NEXT_PUBLIC_TTS_DEBUG=1
 2. 检查是否有跨域/防盗链限制
 3. 检查 URL 是否过期太快
 
+### E. Network 出现 `net::ERR_BLOCKED_BY_ORB`
+
+说明浏览器拦截了跨域媒体资源（常见于第三方音频直链）。
+
+处理：
+
+1. 保持 `SECONDME_TTS_PROXY_AUDIO=1`（默认开启）
+2. 观察后端日志是否出现 `proxy_audio_fetch_success`
+3. 前端 `request_success` 后，`url` 应该是 `data:audio/...;base64,...` 开头
+4. 若仍失败，检查是否有 `proxy_audio_too_large` 或 `proxy_audio_fetch_failed`
+
 ## 4. 关闭调试
 
 排查完成后，把环境变量恢复：
@@ -92,4 +103,3 @@ NEXT_PUBLIC_TTS_DEBUG=1
 SECONDME_TTS_DEBUG=0
 NEXT_PUBLIC_TTS_DEBUG=0
 ```
-

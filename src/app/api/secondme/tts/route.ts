@@ -10,6 +10,77 @@ interface TTSRequestBody {
   participantId?: string;
 }
 
+const MAX_PROXY_AUDIO_BYTES = 8 * 1024 * 1024;
+
+function ttsProxyAudioEnabled(): boolean {
+  return process.env.SECONDME_TTS_PROXY_AUDIO !== '0';
+}
+
+function inferAudioMimeType(contentType: string | null, format?: string): string {
+  if (typeof contentType === 'string') {
+    const normalized = contentType.trim().toLowerCase();
+    if (normalized.startsWith('audio/')) {
+      return normalized.split(';')[0];
+    }
+  }
+
+  if (format?.toLowerCase() === 'wav') return 'audio/wav';
+  if (format?.toLowerCase() === 'ogg') return 'audio/ogg';
+  return 'audio/mpeg';
+}
+
+async function fetchAudioAsDataUrl(
+  requestId: string,
+  audioUrl: string,
+  format?: string
+): Promise<{ dataUrl: string; mimeType: string; byteLength: number } | null> {
+  const response = await fetch(audioUrl, {
+    method: 'GET',
+    headers: {
+      Accept: 'audio/*,*/*;q=0.8'
+    },
+    cache: 'no-store'
+  });
+
+  const contentType = response.headers.get('content-type');
+  const contentLength = response.headers.get('content-length');
+
+  ttsServerLog(requestId, 'proxy_audio_fetch_response', {
+    status: response.status,
+    contentType: contentType ?? null,
+    contentLength: contentLength ?? null
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const byteLength = arrayBuffer.byteLength;
+
+  if (byteLength <= 0) {
+    ttsServerLog(requestId, 'proxy_audio_empty');
+    return null;
+  }
+
+  if (byteLength > MAX_PROXY_AUDIO_BYTES) {
+    ttsServerLog(requestId, 'proxy_audio_too_large', {
+      byteLength,
+      maxBytes: MAX_PROXY_AUDIO_BYTES
+    });
+    return null;
+  }
+
+  const mimeType = inferAudioMimeType(contentType, format);
+  const base64 = Buffer.from(arrayBuffer).toString('base64');
+
+  return {
+    dataUrl: `data:${mimeType};base64,${base64}`,
+    mimeType,
+    byteLength
+  };
+}
+
 function ttsDebugEnabled(): boolean {
   return process.env.SECONDME_TTS_DEBUG === '1' || process.env.NEXT_PUBLIC_TTS_DEBUG === '1';
 }
@@ -140,9 +211,56 @@ export async function POST(request: Request): Promise<Response> {
       elapsedMs: Date.now() - startAt
     });
 
+    let finalResult: Record<string, unknown> = result;
+
+    if (ttsProxyAudioEnabled()) {
+      let audioHost: string | null = null;
+      try {
+        audioHost = new URL(result.url).host;
+      } catch {
+        audioHost = null;
+      }
+
+      ttsServerLog(requestId, 'proxy_audio_fetch_start', {
+        targetUserId,
+        audioHost
+      });
+
+      try {
+        const proxiedAudio = await fetchAudioAsDataUrl(requestId, result.url, result.format);
+        if (proxiedAudio) {
+          finalResult = {
+            ...result,
+            url: proxiedAudio.dataUrl,
+            sourceUrl: result.url,
+            proxied: true,
+            mimeType: proxiedAudio.mimeType,
+            byteLength: proxiedAudio.byteLength
+          };
+
+          ttsServerLog(requestId, 'proxy_audio_fetch_success', {
+            targetUserId,
+            mimeType: proxiedAudio.mimeType,
+            byteLength: proxiedAudio.byteLength
+          });
+        } else {
+          ttsServerLog(requestId, 'proxy_audio_fetch_fallback_original_url', {
+            targetUserId
+          });
+        }
+      } catch (error) {
+        ttsServerLog(requestId, 'proxy_audio_fetch_failed', {
+          targetUserId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    } else {
+      ttsServerLog(requestId, 'proxy_audio_disabled');
+    }
+
     const response = NextResponse.json({
       code: 0,
-      data: result,
+      data: finalResult,
       requestId
     });
     response.headers.set('x-tts-request-id', requestId);
