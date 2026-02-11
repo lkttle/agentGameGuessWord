@@ -19,6 +19,7 @@ interface BuildParticipantConfigOptions {
   participantsConfig?: ParticipantConfigInput[];
   preferredDisplayName?: string;
   alias?: string;
+  realUserAgents?: ParticipantConfigInput[];
 }
 
 function clampParticipantCount(value?: number): number {
@@ -57,19 +58,45 @@ export function buildParticipantConfigs(options: BuildParticipantConfigOptions):
     buildDefaultDisplayName(options.host);
 
   if (options.mode === 'HUMAN_VS_AGENT') {
-    return [
+    const count = clampParticipantCount(options.participantCount);
+    const participants: ParticipantConfigInput[] = [
       {
         type: ParticipantType.HUMAN,
         userId: options.host.id,
         displayName: hostDisplayName
-      },
-      {
-        type: ParticipantType.AGENT,
-        displayName: options.autoJoinSelfAgent ? buildSelfAgentName(options.host) : buildPlatformAgentName(1),
-        ownerUserId: options.autoJoinSelfAgent ? options.host.id : undefined,
-        agentSource: options.autoJoinSelfAgent ? AGENT_SOURCES.SELF : AGENT_SOURCES.PLATFORM
       }
     ];
+
+    // Add self agent if requested
+    if (options.autoJoinSelfAgent) {
+      participants.push({
+        type: ParticipantType.AGENT,
+        displayName: buildSelfAgentName(options.host),
+        ownerUserId: options.host.id,
+        agentSource: AGENT_SOURCES.SELF
+      });
+    }
+
+    // Fill with real user agents first
+    if (options.realUserAgents) {
+      for (const realAgent of options.realUserAgents) {
+        if (participants.length >= count) break;
+        participants.push(realAgent);
+      }
+    }
+
+    // Fill remaining with platform agents
+    let agentIndex = 1;
+    while (participants.length < count) {
+      participants.push({
+        type: ParticipantType.AGENT,
+        displayName: buildPlatformAgentName(agentIndex),
+        agentSource: AGENT_SOURCES.PLATFORM
+      });
+      agentIndex += 1;
+    }
+
+    return participants;
   }
 
   const count = clampParticipantCount(options.participantCount);
@@ -88,6 +115,14 @@ export function buildParticipantConfigs(options: BuildParticipantConfigOptions):
       ownerUserId: options.host.id,
       agentSource: AGENT_SOURCES.SELF
     });
+  }
+
+  // Fill with real user agents first
+  if (options.realUserAgents) {
+    for (const realAgent of options.realUserAgents) {
+      if (participants.length >= count) break;
+      participants.push(realAgent);
+    }
   }
 
   let agentIndex = 1;

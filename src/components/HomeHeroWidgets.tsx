@@ -114,8 +114,13 @@ export function HomeRecentUsersTicker() {
 
     void loadRecentUsers();
 
+    const interval = setInterval(() => {
+      void loadRecentUsers();
+    }, 30_000);
+
     return () => {
       active = false;
+      clearInterval(interval);
     };
   }, []);
 

@@ -67,14 +67,44 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ room });
   }
 
+  // Query real SecondMe users to fill agent slots before platform agents
+  const requestedCount = Math.max(2, Math.min(5, body.participantCount ?? 2));
+  const autoJoinSelf = Boolean(body.autoJoinSelfAgent);
+
+  // Slots available for real agents (total - host - optional self agent)
+  const realAgentSlots = requestedCount - 1 - (autoJoinSelf ? 1 : 0);
+  let realUsers: { id: string; name: string | null; accessToken: string | null }[] = [];
+  if (realAgentSlots > 0) {
+    realUsers = await prisma.user.findMany({
+      where: {
+        id: { not: user.id },
+        secondmeUserId: { not: null },
+        accessToken: { not: null }
+      },
+      select: { id: true, name: true, accessToken: true },
+      orderBy: { createdAt: 'desc' },
+      take: realAgentSlots
+    });
+  }
+
+  // Build participantsConfig with real users injected
+  const realUserConfigs: ParticipantConfigInput[] = realUsers.map((ru) => ({
+    type: ParticipantType.AGENT,
+    displayName: `${ru.name || 'SecondMe 玩家'} 的 Agent`,
+    userId: ru.id,
+    ownerUserId: ru.id,
+    agentSource: 'SELF' as const
+  }));
+
   const participantConfigs = buildParticipantConfigs({
     host: user,
     mode: body.mode,
-    autoJoinSelfAgent: Boolean(body.autoJoinSelfAgent),
+    autoJoinSelfAgent: autoJoinSelf,
     participantCount: body.participantCount,
     participantsConfig: body.participantsConfig,
     preferredDisplayName: body.displayName,
-    alias: normalizeAlias(body.alias)
+    alias: normalizeAlias(body.alias),
+    realUserAgents: realUserConfigs
   });
 
   const validationError = validateParticipantConfigs(participantConfigs, body.mode);

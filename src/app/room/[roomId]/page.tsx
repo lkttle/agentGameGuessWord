@@ -118,22 +118,65 @@ function getAvatarGradient(index: number): string {
 /* ----------------------------------------------------------------
    TTS Helper - auto-play agent responses
    ---------------------------------------------------------------- */
-async function playTTS(text: string, userId?: string | null) {
-  try {
-    const body: Record<string, string> = { text, emotion: 'happy' };
-    if (userId) body.userId = userId;
-    const res = await api<{ code: number; data: { url: string } }>('/api/secondme/tts', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-    if (res.data?.url) {
-      const audio = new Audio(res.data.url);
-      audio.volume = 0.7;
-      void audio.play().catch(() => { /* autoplay may be blocked */ });
-    }
-  } catch {
-    // TTS is best-effort, don't block game flow
+let audioUnlocked = false;
+const ttsQueue: Array<() => Promise<void>> = [];
+let ttsPlaying = false;
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+  // Play a silent buffer to unlock audio on iOS/Safari
+  const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+  const buffer = ctx.createBuffer(1, 1, 22050);
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+  source.start(0);
+  audioUnlocked = true;
+}
+
+if (typeof window !== 'undefined') {
+  const unlockEvents = ['click', 'touchstart', 'keydown'];
+  const onUnlock = () => {
+    unlockAudio();
+    unlockEvents.forEach(e => document.removeEventListener(e, onUnlock));
+  };
+  unlockEvents.forEach(e => document.addEventListener(e, onUnlock, { once: false }));
+}
+
+async function processTtsQueue() {
+  if (ttsPlaying || ttsQueue.length === 0) return;
+  ttsPlaying = true;
+  while (ttsQueue.length > 0) {
+    const task = ttsQueue.shift();
+    if (task) await task();
   }
+  ttsPlaying = false;
+}
+
+async function playTTS(text: string, userId?: string | null) {
+  const task = async () => {
+    try {
+      const body: Record<string, string> = { text, emotion: 'happy' };
+      if (userId) body.userId = userId;
+      const res = await api<{ code: number; data: { url: string } }>('/api/secondme/tts', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      if (res.data?.url) {
+        const audio = new Audio(res.data.url);
+        audio.volume = 0.7;
+        await new Promise<void>((resolve) => {
+          audio.onended = () => resolve();
+          audio.onerror = () => resolve();
+          audio.play().catch(() => resolve());
+        });
+      }
+    } catch {
+      // TTS is best-effort, don't block game flow
+    }
+  };
+  ttsQueue.push(task);
+  void processTtsQueue();
 }
 
 /* ----------------------------------------------------------------
@@ -232,10 +275,13 @@ export default function RoomPage() {
   const [failedRounds, setFailedRounds] = useState(0);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [timerStarted, setTimerStarted] = useState(false);
+  const [turnTimeLeft, setTurnTimeLeft] = useState<number | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const turnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const autoFinishRef = useRef(false);
+  const turnSkippingRef = useRef(false);
   const ttsPlayedRef = useRef(new Set<string>());
 
   // Compute scores from round logs
@@ -342,6 +388,38 @@ export default function RoomPage() {
     }
   }, [timeLeft, room?.status, isHost]);
 
+  // Per-turn 15s timer - start when match is running and not busy
+  useEffect(() => {
+    if (room?.status !== 'RUNNING' || !currentQuestion || !!busy) {
+      if (turnTimerRef.current) clearInterval(turnTimerRef.current);
+      return;
+    }
+    setTurnTimeLeft(15);
+    turnSkippingRef.current = false;
+    turnTimerRef.current = setInterval(() => {
+      setTurnTimeLeft(prev => {
+        if (prev === null || prev <= 1) return 0;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => {
+      if (turnTimerRef.current) clearInterval(turnTimerRef.current);
+    };
+  }, [room?.status, currentQuestion, match?.roundLogs?.length, !!busy]);
+
+  // Auto-skip turn when per-turn timer reaches 0
+  useEffect(() => {
+    if (turnTimeLeft !== 0 || !currentQuestion || room?.status !== 'RUNNING' || turnSkippingRef.current || !!busy) return;
+    turnSkippingRef.current = true;
+    if (turnTimerRef.current) clearInterval(turnTimerRef.current);
+    if (room.mode === GAME_MODES.AGENT_VS_AGENT) {
+      void handleAgentRound();
+    } else {
+      // In HUMAN_VS_AGENT, auto-trigger agent round (skip human turn)
+      void handleAgentRoundOnly();
+    }
+  }, [turnTimeLeft, room?.status, currentQuestion, busy]);
+
   // Polling
   useEffect(() => {
     if (!roomId) return;
@@ -386,6 +464,33 @@ export default function RoomPage() {
     if (!currentQuestion) return;
     const prevLogCount = match?.roundLogs?.length ?? 0;
     await runAction('Agent 对战中...', async () => {
+      await api(`/api/matches/${match!.id}/agent-round`, {
+        method: 'POST',
+        body: JSON.stringify({
+          targetWord: currentQuestion.answer,
+          roundIndex: (match?.totalRounds ?? 0) + 1
+        })
+      });
+    });
+    const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
+    if (freshState) {
+      setRoomState(freshState);
+      const newLogs = freshState.room.match?.roundLogs ?? [];
+      const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
+      const anyCorrect = latestLogs.some(l => l.isCorrect);
+      if (anyCorrect) {
+        void fetchQuestion();
+      } else {
+        setFailedRounds(prev => prev + 1);
+      }
+    }
+  }
+
+  // Agent-only round for when human times out
+  async function handleAgentRoundOnly() {
+    if (!currentQuestion) return;
+    const prevLogCount = match?.roundLogs?.length ?? 0;
+    await runAction('超时！Agent 回合中...', async () => {
       await api(`/api/matches/${match!.id}/agent-round`, {
         method: 'POST',
         body: JSON.stringify({
@@ -481,6 +586,11 @@ export default function RoomPage() {
             </span>
           </div>
           <div className="chatroom__header-right">
+            {room?.status === 'RUNNING' && turnTimeLeft !== null && (
+              <span className={`chatroom__turn-timer ${turnTimeLeft <= 5 ? 'chatroom__turn-timer--urgent' : ''}`}>
+                {turnTimeLeft}s
+              </span>
+            )}
             {room?.status === 'RUNNING' && timeLeft !== null && (
               <span className={`chatroom__timer ${timerUrgent ? 'chatroom__timer--urgent' : ''}`}>
                 {formatTime(timeLeft)}
