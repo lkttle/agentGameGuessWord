@@ -8,6 +8,7 @@ import {
   validateParticipantConfigs,
   type ParticipantConfigInput
 } from '@/lib/room/participants';
+import { pickStandbyAgentsForRoom } from '@/lib/warmup/service';
 
 interface CreateRoomBody {
   mode?: GameMode;
@@ -67,25 +68,22 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ room });
   }
 
-  // Query real SecondMe users to fill agent slots before platform agents
+  // Pick prewarmed standby agents first (cache-friendly)
   const requestedCount = Math.max(2, Math.min(5, body.participantCount ?? 2));
   const autoJoinSelf = Boolean(body.autoJoinSelfAgent);
 
   // Slots available for real agents (total - host - optional self agent)
   const realAgentSlots = requestedCount - 1 - (autoJoinSelf ? 1 : 0);
-  let realUsers: { id: string; name: string | null; accessToken: string | null }[] = [];
-  if (realAgentSlots > 0) {
-    realUsers = await prisma.user.findMany({
-      where: {
-        id: { not: user.id },
-        secondmeUserId: { not: null },
-        accessToken: { not: null }
-      },
-      select: { id: true, name: true, accessToken: true },
-      orderBy: { createdAt: 'desc' },
-      take: realAgentSlots
-    });
-  }
+  const standbyAgents = realAgentSlots > 0
+    ? await pickStandbyAgentsForRoom(realAgentSlots + 1)
+    : [];
+  const realUsers = standbyAgents
+    .filter((item) => item.userId !== user.id)
+    .slice(0, realAgentSlots)
+    .map((item) => ({
+      id: item.userId,
+      name: item.name
+    }));
 
   // Build participantsConfig with real users injected
   const realUserConfigs: ParticipantConfigInput[] = realUsers.map((ru) => ({

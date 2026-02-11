@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { GAME_MODES, type GameMode } from '@/lib/domain/types';
 import { HomeRecentUsersTicker } from '@/components/HomeHeroWidgets';
@@ -69,6 +69,15 @@ function HomeContent() {
   const [busy, setBusy] = useState('');
 
   const modeConfig = modeOptions.find(o => o.key === selectedMode) ?? modeOptions[0];
+
+  useEffect(() => {
+    void fetch('/api/warmup/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      cache: 'no-store'
+    }).catch(() => null);
+  }, []);
 
   async function ensureSession(): Promise<SessionResponse | null> {
     const session = await apiJson<SessionResponse>('/api/auth/session').catch(

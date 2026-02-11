@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
 import { secondMeSdk } from '@/lib/secondme/sdk';
+import { getCachedAgentReply } from '@/lib/agent/warmup-cache';
 
 interface TTSRequestBody {
   text?: string;
   emotion?: string;
   userId?: string;
   participantId?: string;
+  questionKey?: string;
 }
 
 const MAX_PROXY_AUDIO_BYTES = 8 * 1024 * 1024;
@@ -111,6 +113,37 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'text is required', requestId }, { status: 400 });
   }
 
+  const participant = body.participantId
+    ? await prisma.participant.findUnique({
+        where: { id: body.participantId },
+        select: { userId: true }
+      })
+    : null;
+
+  if (participant?.userId && body.participantId && body.questionKey?.trim()) {
+    const normalized = await getCachedAgentReply(participant.userId, body.questionKey.trim());
+    if (normalized?.ttsUrl && normalized.replyText === text) {
+      ttsServerLog(requestId, 'cache_hit_return_tts', {
+        participantId: body.participantId,
+        targetUserId: participant.userId,
+        questionKey: body.questionKey.trim()
+      });
+
+      const response = NextResponse.json({
+        code: 0,
+        data: {
+          url: normalized.ttsUrl,
+          durationMs: normalized.ttsDurationMs,
+          format: normalized.ttsFormat
+        },
+        cacheHit: true,
+        requestId
+      });
+      response.headers.set('x-tts-request-id', requestId);
+      return response;
+    }
+  }
+
   ttsServerLog(requestId, 'request_received', {
     currentUserId: currentUser.id,
     participantId: body.participantId ?? null,
@@ -123,11 +156,6 @@ export async function POST(request: Request): Promise<Response> {
   let targetUserId = body.userId || currentUser.id;
 
   if (body.participantId) {
-    const participant = await prisma.participant.findUnique({
-      where: { id: body.participantId },
-      select: { userId: true }
-    });
-
     if (participant?.userId) {
       targetUserId = participant.userId;
     }

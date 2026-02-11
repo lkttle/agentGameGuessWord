@@ -90,6 +90,7 @@ interface PinyinQuestion {
   initialsText: string;
   answer: string;
   category: string;
+  questionKey?: string;
 }
 
 /* ----------------------------------------------------------------
@@ -259,6 +260,7 @@ function sleep(ms: number): Promise<void> {
 
 function questionToKey(question: PinyinQuestion | null): string {
   if (!question) return '';
+  if (question.questionKey?.trim()) return question.questionKey.trim();
   return `${question.initialsText}|${question.answer}|${question.category}`;
 }
 
@@ -296,7 +298,7 @@ async function drainTtsQueue() {
 
 async function playTTS(
   text: string,
-  options?: { userId?: string | null; participantId?: string }
+  options?: { userId?: string | null; participantId?: string; questionKey?: string }
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const sessionVersion = ttsSessionVersion;
@@ -341,6 +343,7 @@ async function playTTS(
         const body: Record<string, string> = { text, emotion: 'happy' };
         if (options?.userId) body.userId = options.userId;
         if (options?.participantId) body.participantId = options.participantId;
+        if (options?.questionKey) body.questionKey = options.questionKey;
 
         const res = await fetch('/api/secondme/tts', {
           method: 'POST',
@@ -375,10 +378,11 @@ async function playTTS(
           return settle(false);
         }
 
-        ttsClientLog('request_success', {
+      ttsClientLog('request_success', {
           requestId: json?.requestId ?? res.headers.get('x-tts-request-id') ?? null,
           hasUrl: Boolean(url),
-          durationMs: json?.data?.durationMs ?? null
+          durationMs: json?.data?.durationMs ?? null,
+          cacheHit: json?.cacheHit === true
         });
         if (!url) {
           ttsClientLog('request_missing_url', { response: json });
@@ -518,7 +522,7 @@ async function playTTS(
 
 async function playTTSWithRetry(
   text: string,
-  options?: { userId?: string | null; participantId?: string }
+  options?: { userId?: string | null; participantId?: string; questionKey?: string }
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= MAX_TTS_ATTEMPTS; attempt += 1) {
     ttsClientLog('retry_attempt', {
@@ -639,6 +643,7 @@ export default function RoomPage() {
     text: string;
     userId?: string | null;
     participantId?: string;
+    questionKey?: string;
   }>>([]);
   const revealProcessingRef = useRef(false);
   const revealInitializedRef = useRef(false);
@@ -676,7 +681,8 @@ export default function RoomPage() {
       revealAgentLog(next.id);
       const played = await playTTSWithRetry(next.text, {
         userId: next.userId,
-        participantId: next.participantId
+        participantId: next.participantId,
+        questionKey: next.questionKey
       });
       playedAgentLogIdsRef.current.add(next.id);
       ttsClientLog('reveal_tts_result', {
@@ -745,25 +751,26 @@ export default function RoomPage() {
     stopAllTTSPlayback();
 
     try {
-      const res = await api<{ questions: PinyinQuestion[] }>('/api/questions/generate', {
+      const res = await api<{ question: PinyinQuestion }>(`/api/matches/${match!.id}/next-question`, {
         method: 'POST',
-        body: JSON.stringify({ count: 1 })
+        body: '{}'
       });
       if (!pageActiveRef.current) return;
-        if (res.questions.length > 0) {
-          setCurrentQuestion(res.questions[0]);
-          setAnswerRevealText('');
-          switchingQuestionRef.current = false;
-          failedRoundsRef.current = 0;
-          setFailedRounds(0);
-        }
+      if (res.question) {
+        setCurrentQuestion(res.question);
+        setAnswerRevealText('');
+        switchingQuestionRef.current = false;
+        failedRoundsRef.current = 0;
+        setFailedRounds(0);
+      }
     } catch {
       if (!pageActiveRef.current) return;
       setCurrentQuestion({
         initials: ['C', 'F'],
         initialsText: 'CF',
         answer: '吃饭',
-        category: '动作'
+        category: '动作',
+        questionKey: 'CF|吃饭|动作'
       });
       setAnswerRevealText('');
       failedRoundsRef.current = 0;
@@ -771,7 +778,7 @@ export default function RoomPage() {
     } finally {
       switchingQuestionRef.current = false;
     }
-  }, []);
+  }, [match?.id]);
 
   const markFailedRoundAndMaybeSwitchQuestion = useCallback(async () => {
     if (!pageActiveRef.current) return;
@@ -833,6 +840,16 @@ export default function RoomPage() {
       void fetchQuestion();
     }
   }, [room?.status, currentQuestion, fetchQuestion]);
+
+  useEffect(() => {
+    if (room?.status !== 'RUNNING' || !match?.id) return;
+    void fetch('/api/warmup/ping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      cache: 'no-store'
+    }).catch(() => null);
+  }, [room?.status, match?.id]);
 
   // Start countdown timer when game begins
   useEffect(() => {
@@ -978,7 +995,8 @@ export default function RoomPage() {
         id: log.id,
         text,
         userId: player.ownerUserId ?? player.userId,
-        participantId: player.id
+        participantId: player.id,
+        questionKey: currentQuestionKeyRef.current
       });
       ttsClientLog('queue_push', {
         logId: log.id,
@@ -1307,7 +1325,8 @@ export default function RoomPage() {
                   void unlockAudioPlayback('manual_tts_click');
                   void playTTSWithRetry(answer.guessWord, {
                     userId: p.ownerUserId ?? p.userId,
-                    participantId: p.id
+                    participantId: p.id,
+                    questionKey: currentQuestionKeyRef.current
                   });
                 }
               } : undefined}
