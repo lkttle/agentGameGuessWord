@@ -1,5 +1,5 @@
 /* ============================================================
-   A2A Guess Word — Production Design System
+   A2A 猜词王 — Production Design System
    Inspired by Second.me purple palette + gaming energy
    ============================================================ */
 
@@ -229,6 +229,22 @@ h1, h2, h3, h4, h5, h6 {
 
 .navbar__cta {
   margin-left: var(--space-sm);
+}
+
+.navbar__status {
+  margin-left: var(--space-sm);
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+.navbar__user {
+  margin-left: var(--space-sm);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+  color: var(--color-text-secondary);
 }
 
 /* ----------------------------------------------------------
@@ -522,6 +538,181 @@ h1, h2, h3, h4, h5, h6 {
   gap: var(--space-md);
   justify-content: center;
   flex-wrap: wrap;
+}
+
+.hero__actions .btn[aria-busy="true"] {
+  opacity: 0.75;
+}
+
+.hero__leaderboard-btn {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: white;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.hero__leaderboard-btn:hover {
+  border-color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.14);
+  color: white;
+}
+
+.hero-community {
+  margin-top: var(--space-lg);
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.hero-community__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.hero-community__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--purple-300);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.hero-community__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34D399;
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.7);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.hero-community__cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: white;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.95), rgba(249, 115, 22, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  transition: transform var(--duration-normal) var(--ease-default),
+              box-shadow var(--duration-normal) var(--ease-default);
+}
+
+.hero-community__cta:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.hero-community__track {
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  position: relative;
+}
+
+.hero-community__track::before,
+.hero-community__track::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 36px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.hero-community__track::before {
+  left: 0;
+  background: linear-gradient(90deg, rgba(59, 7, 100, 0.9), rgba(59, 7, 100, 0));
+}
+
+.hero-community__track::after {
+  right: 0;
+  background: linear-gradient(270deg, rgba(59, 7, 100, 0.9), rgba(59, 7, 100, 0));
+}
+
+.hero-community__marquee {
+  display: flex;
+  width: max-content;
+  padding: 8px 0;
+  animation: heroMarquee 44s linear infinite;
+}
+
+.hero-community__track:hover .hero-community__marquee {
+  animation-play-state: paused;
+}
+
+.hero-community__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: var(--space-md);
+  padding: 6px 10px 6px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: white;
+  transition: transform var(--duration-normal) var(--ease-default),
+              background var(--duration-normal) var(--ease-default),
+              border-color var(--duration-normal) var(--ease-default);
+}
+
+.hero-community__item:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.hero-community__avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--avatar-bg, rgba(255, 255, 255, 0.16));
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  font-size: 1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.hero-community__avatar-fallback {
+  color: white;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.hero-community__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.hero-community__name {
+  font-size: 0.9rem;
+  max-width: 128px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.hero-community__join {
+  font-size: 0.74rem;
+  color: var(--purple-200);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .hero__stats {
@@ -1348,6 +1539,15 @@ h1, h2, h3, h4, h5, h6 {
 .leaderboard-header {
   text-align: center;
   padding: var(--space-2xl) 0 var(--space-lg);
+  margin-bottom: var(--space-md);
+}
+
+.leaderboard-header .section__title {
+  color: var(--purple-900);
+}
+
+.leaderboard-header .section__desc {
+  color: var(--purple-700);
 }
 
 .leaderboard-tabs {
@@ -1355,28 +1555,38 @@ h1, h2, h3, h4, h5, h6 {
   justify-content: center;
   gap: var(--space-xs);
   margin-bottom: var(--space-xl);
+  padding: var(--space-xs);
+  border-radius: var(--radius-full);
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.08), rgba(124, 58, 237, 0.03));
+  border: 1px solid rgba(124, 58, 237, 0.12);
 }
 
 .leaderboard-tab {
   padding: 8px 20px;
   border-radius: var(--radius-full);
-  border: 1.5px solid var(--color-border);
-  background: white;
+  border: 1.5px solid transparent;
+  background: transparent;
   font-family: var(--font-heading);
   font-weight: 600;
   font-size: 0.88rem;
+  color: var(--purple-700);
   cursor: pointer;
   transition: all var(--duration-normal) var(--ease-default);
 }
 
 .leaderboard-tab:hover {
-  border-color: var(--color-primary);
+  border-color: rgba(124, 58, 237, 0.25);
+  background: rgba(124, 58, 237, 0.08);
 }
 
 .leaderboard-tab--active {
-  background: var(--color-primary);
+  background: var(--gradient-purple);
   color: white;
-  border-color: var(--color-primary);
+  border-color: rgba(124, 58, 237, 0.28);
+  box-shadow: var(--shadow-md);
 }
 
 .leaderboard-list {
@@ -1384,6 +1594,10 @@ h1, h2, h3, h4, h5, h6 {
   gap: var(--space-sm);
   max-width: 700px;
   margin: 0 auto;
+  padding: var(--space-sm);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.04), rgba(168, 85, 247, 0.02));
+  border: 1px solid rgba(124, 58, 237, 0.08);
 }
 
 .leaderboard-item {
@@ -1399,6 +1613,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .leaderboard-item:hover {
   box-shadow: var(--shadow-md);
+  border-color: rgba(124, 58, 237, 0.2);
 }
 
 .leaderboard-item__rank {
@@ -1430,8 +1645,8 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .leaderboard-item__rank--default {
-  background: var(--purple-50);
-  color: var(--color-text-secondary);
+  background: linear-gradient(135deg, var(--purple-100), var(--purple-50));
+  color: var(--purple-700);
 }
 
 .leaderboard-item__info {
@@ -1446,7 +1661,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .leaderboard-item__record {
   font-size: 0.82rem;
-  color: var(--color-text-secondary);
+  color: var(--purple-700);
 }
 
 .leaderboard-item__score {
@@ -1576,6 +1791,11 @@ h1, h2, h3, h4, h5, h6 {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes heroMarquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
 .animate-fade-in {
   animation: fadeIn 0.4s var(--ease-default) both;
 }
@@ -1618,6 +1838,15 @@ h1, h2, h3, h4, h5, h6 {
   .hero__actions {
     flex-direction: column;
     align-items: center;
+  }
+
+  .hero-community__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hero-community__marquee {
+    animation-duration: 52s;
   }
 
   .navbar__links {

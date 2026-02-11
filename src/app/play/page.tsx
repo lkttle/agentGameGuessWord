@@ -41,25 +41,23 @@ function PlayContent() {
   const [busy, setBusy] = useState('');
 
   async function ensureSession(): Promise<boolean> {
-    const session = await apiJson<{ authenticated: boolean }>('/api/auth/session');
-    if (session.authenticated) return true;
-    // Auto mock-login for dev
-    await apiJson('/api/dev/mock-login', {
-      method: 'POST',
-      body: JSON.stringify({
-        secondmeUserId: `user-${Date.now()}`,
-        name: displayName || joinName || 'Player',
-        email: `player-${Date.now()}@demo.local`
-      })
-    });
-    return true;
+    const session = await apiJson<{ authenticated: boolean }>('/api/auth/session').catch(() => ({ authenticated: false }));
+    if (session.authenticated) {
+      return true;
+    }
+    const returnTo = `/play?mode=${encodeURIComponent(mode)}`;
+    window.location.href = `/api/auth/login?return_to=${encodeURIComponent(returnTo)}`;
+    return false;
   }
 
   async function handleCreate() {
     try {
       setError('');
-      setBusy('Creating room...');
-      await ensureSession();
+      setBusy('正在创建房间...');
+      const ok = await ensureSession();
+      if (!ok) {
+        return;
+      }
       const name = displayName.trim() || (mode === GAME_MODES.AGENT_VS_AGENT ? 'Agent Alpha' : 'Player');
       const res = await apiJson<{ room: { id: string } }>('/api/rooms', {
         method: 'POST',
@@ -67,7 +65,7 @@ function PlayContent() {
       });
       router.push(`/room/${res.room.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create room');
+      setError(err instanceof Error ? err.message : '创建房间失败');
     } finally {
       setBusy('');
     }
@@ -75,13 +73,16 @@ function PlayContent() {
 
   async function handleJoin() {
     if (!joinRoomId.trim()) {
-      setError('Please enter a Room ID');
+      setError('请输入房间 ID');
       return;
     }
     try {
       setError('');
-      setBusy('Joining room...');
-      await ensureSession();
+      setBusy('正在加入房间...');
+      const ok = await ensureSession();
+      if (!ok) {
+        return;
+      }
       const name = joinName.trim() || 'Challenger';
       await apiJson(`/api/rooms/${joinRoomId.trim()}/join`, {
         method: 'POST',
@@ -89,7 +90,7 @@ function PlayContent() {
       });
       router.push(`/room/${joinRoomId.trim()}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to join room');
+      setError(err instanceof Error ? err.message : '加入房间失败');
     } finally {
       setBusy('');
     }
@@ -98,8 +99,12 @@ function PlayContent() {
   return (
     <div className="page-container">
       <div className="lobby-header">
-        <h1 className="section__title">Game Lobby</h1>
-        <p className="section__desc">Create a new battle or join an existing room</p>
+        <h1 className="section__title">对战大厅</h1>
+        <p className="section__desc">支持 Agent vs Agent 与 Human vs Agent 两种模式</p>
+      </div>
+
+      <div className="alert alert--info mb-md">
+        核心用户来自 SecondMe：开始对战前将通过 SecondMe OAuth2 登录。
       </div>
 
       {error && <div className="alert alert--error mb-md">{error}</div>}
@@ -113,39 +118,39 @@ function PlayContent() {
       <div className="lobby-grid">
         {/* Create Room */}
         <div className="lobby-card animate-slide-up">
-          <h2 className="lobby-card__title">Create Room</h2>
-          <p className="lobby-card__desc">Set up a new game room and invite others to join.</p>
+          <h2 className="lobby-card__title">创建房间</h2>
+          <p className="lobby-card__desc">新建一局对战并邀请其他玩家加入。</p>
 
           <div className="lobby-form">
             <div className="form-group">
-              <label className="form-label" htmlFor="create-mode">Game Mode</label>
+              <label className="form-label" htmlFor="create-mode">对战模式</label>
               <select
                 id="create-mode"
                 className="select"
                 value={mode}
                 onChange={(e) => setMode(e.target.value as GameMode)}
               >
-                <option value={GAME_MODES.AGENT_VS_AGENT}>Agent vs Agent</option>
-                <option value={GAME_MODES.HUMAN_VS_AGENT}>Human vs Agent</option>
+                <option value={GAME_MODES.AGENT_VS_AGENT}>Agent vs Agent（核心）</option>
+                <option value={GAME_MODES.HUMAN_VS_AGENT}>Human vs Agent（挑战）</option>
               </select>
             </div>
 
             <div className="form-group">
-              <label className="form-label" htmlFor="create-name">Display Name</label>
+              <label className="form-label" htmlFor="create-name">显示名称</label>
               <input
                 id="create-name"
                 className="input"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder={mode === GAME_MODES.AGENT_VS_AGENT ? 'Agent Alpha' : 'Your name'}
+                placeholder={mode === GAME_MODES.AGENT_VS_AGENT ? 'Agent Alpha' : '你的昵称'}
               />
             </div>
 
             <div style={{ background: 'var(--purple-50)', borderRadius: 'var(--radius-md)', padding: 'var(--space-md)' }}>
               <p style={{ fontSize: '0.85rem', color: 'var(--purple-800)', margin: 0 }}>
                 {mode === GAME_MODES.AGENT_VS_AGENT
-                  ? 'Watch two AI agents battle it out! You act as the referee.'
-                  : 'Challenge an AI agent with your word-guessing skills!'}
+                  ? '观看两个 AI Agent 自主对战，你可以作为裁判围观全程。'
+                  : '你将直接挑战 AI Agent，用猜词实力争取胜利。'}
               </p>
             </div>
 
@@ -155,31 +160,31 @@ function PlayContent() {
               onClick={() => void handleCreate()}
               disabled={!!busy}
             >
-              {busy === 'Creating room...' ? 'Creating...' : 'Create Room'}
+              {busy === '正在创建房间...' ? '创建中...' : '创建房间'}
             </button>
           </div>
         </div>
 
         {/* Join Room */}
         <div className="lobby-card animate-slide-up" style={{ animationDelay: '0.1s' }}>
-          <h2 className="lobby-card__title">Join Room</h2>
-          <p className="lobby-card__desc">Enter a room code to join an existing game.</p>
+          <h2 className="lobby-card__title">加入房间</h2>
+          <p className="lobby-card__desc">输入房间 ID 并选择身份后加入对战。</p>
 
           <div className="lobby-form">
             <div className="form-group">
-              <label className="form-label" htmlFor="join-room">Room ID</label>
+              <label className="form-label" htmlFor="join-room">房间 ID</label>
               <input
                 id="join-room"
                 className="input"
                 value={joinRoomId}
                 onChange={(e) => setJoinRoomId(e.target.value)}
-                placeholder="Paste room ID here"
+                placeholder="请输入房间 ID"
                 style={{ fontFamily: 'var(--font-mono)' }}
               />
             </div>
 
             <div className="form-group">
-              <label className="form-label" htmlFor="join-type">Join As</label>
+              <label className="form-label" htmlFor="join-type">加入身份</label>
               <select
                 id="join-type"
                 className="select"
@@ -192,13 +197,13 @@ function PlayContent() {
             </div>
 
             <div className="form-group">
-              <label className="form-label" htmlFor="join-name">Display Name</label>
+              <label className="form-label" htmlFor="join-name">显示名称</label>
               <input
                 id="join-name"
                 className="input"
                 value={joinName}
                 onChange={(e) => setJoinName(e.target.value)}
-                placeholder="Challenger"
+                placeholder="挑战者"
               />
             </div>
 
@@ -208,7 +213,7 @@ function PlayContent() {
               onClick={() => void handleJoin()}
               disabled={!!busy}
             >
-              {busy === 'Joining room...' ? 'Joining...' : 'Join Room'}
+              {busy === '正在加入房间...' ? '加入中...' : '加入房间'}
             </button>
           </div>
         </div>

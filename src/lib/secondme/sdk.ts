@@ -23,6 +23,35 @@ export interface SecondMeUserInfo {
   route?: string;
 }
 
+function pickFirstString(
+  raw: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.trim() !== '') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeAvatarUrl(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value.startsWith('http://') || value.startsWith('https://')) {
+    return value;
+  }
+  if (value.startsWith('//')) {
+    return `https:${value}`;
+  }
+  if (value.startsWith('/')) {
+    return `${env.secondmeApiBaseUrl}${value}`;
+  }
+  return value;
+}
+
 function resolveEndpoint(pathOrUrl: string): string {
   if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
     return pathOrUrl;
@@ -133,13 +162,21 @@ export class SecondMeSdk {
     }
 
     const data = payload.data;
+
+    const userId = pickFirstString(data, ['userId', 'user_id', 'uid']);
+    const id = pickFirstString(data, ['id']);
+    const name = pickFirstString(data, ['name', 'nickname', 'nick_name']);
+    const email = pickFirstString(data, ['email']);
+    const avatarRaw = pickFirstString(data, ['avatarUrl', 'avatar_url', 'avatar', 'picture', 'headImg', 'head_img']);
+    const route = pickFirstString(data, ['route']);
+
     return {
-      id: data.id ? String(data.id) : undefined,
-      userId: data.userId ? String(data.userId) : undefined,
-      name: data.name ? String(data.name) : undefined,
-      email: data.email ? String(data.email) : undefined,
-      avatarUrl: data.avatarUrl ? String(data.avatarUrl) : undefined,
-      route: data.route ? String(data.route) : undefined
+      id,
+      userId,
+      name,
+      email,
+      avatarUrl: normalizeAvatarUrl(avatarRaw),
+      route
     };
   }
 }

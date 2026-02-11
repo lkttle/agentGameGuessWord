@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { HomePrimaryActionButton, HomeRecentUsersTicker } from '@/components/HomeHeroWidgets';
 
 function AgentIcon() {
   return (
@@ -33,36 +34,35 @@ export default function HomePage() {
       <section className="hero">
         <div className="hero__inner">
           <div className="hero__badge">
-            SecondMe Hackathon &middot; A2A Arena
+            SecondMe Hackathon &middot; A2A 猜词王
           </div>
           <h1 className="hero__title">
-            AI Agent<br />
-            <span className="hero__title-accent">Guess Word</span> Battle
+            <span className="hero__title-accent">A2A 猜词王</span><br />
+            AI Agent 首字母对战
           </h1>
           <p className="hero__subtitle">
-            AI 时代 Agent 与人类社交的新形式 —— 一款短平快的 A2A 猜词竞技游戏。
-            观看 Agent 对战、挑战 AI、登上排行榜。
+            这是一款基于 SecondMe 的 A2A 猜词竞技游戏。
+            通过 SecondMe OAuth2 登录后，你可以观看 Agent 对战、挑战 AI，并冲击排行榜。
           </p>
           <div className="hero__actions">
-            <Link href="/play" className="btn btn--gradient btn--lg">
-              Start Playing
-            </Link>
-            <Link href="/leaderboard" className="btn btn--secondary btn--lg" style={{ borderColor: 'rgba(255,255,255,0.3)', color: 'white' }}>
-              Leaderboard
+            <HomePrimaryActionButton />
+            <Link href="/leaderboard" className="btn btn--secondary btn--lg hero__leaderboard-btn">
+              查看排行榜
             </Link>
           </div>
+          <HomeRecentUsersTicker />
           <div className="hero__stats">
             <div className="hero__stat">
               <span className="hero__stat-value">2</span>
-              <span className="hero__stat-label">Game Modes</span>
+              <span className="hero__stat-label">对战模式</span>
+            </div>
+            <div className="hero__stat">
+              <span className="hero__stat-value">OAuth2</span>
+              <span className="hero__stat-label">SecondMe 身份体系</span>
             </div>
             <div className="hero__stat">
               <span className="hero__stat-value">A2A</span>
-              <span className="hero__stat-label">Protocol</span>
-            </div>
-            <div className="hero__stat">
-              <span className="hero__stat-value">Real-time</span>
-              <span className="hero__stat-label">Battle</span>
+              <span className="hero__stat-label">实时博弈</span>
             </div>
           </div>
         </div>
@@ -72,9 +72,9 @@ export default function HomePage() {
       <section className="section">
         <div className="page-container">
           <div className="section__header">
-            <h2 className="section__title">Choose Your Battle</h2>
+            <h2 className="section__title">选择你的对战模式</h2>
             <p className="section__desc">
-              两种对战模式，体验 AI Agent 之间的智力博弈
+              两种玩法均基于 SecondMe 登录身份，支持统一积分与榜单统计
             </p>
           </div>
 
@@ -83,18 +83,18 @@ export default function HomePage() {
               <div className="mode-card__icon">
                 <AgentIcon />
               </div>
-              <h3 className="mode-card__title">Agent vs Agent</h3>
+              <h3 className="mode-card__title">Agent vs Agent（核心）</h3>
               <p className="mode-card__desc">
-                观看两个 AI Agent 自主对战，比拼推理能力。作为裁判见证 A2A 智能博弈的精彩瞬间。
+                观看两个 AI Agent 自主对战，比拼推理能力，直观展示 A2A 场景价值。
               </p>
             </Link>
             <Link href="/play?mode=HUMAN_VS_AGENT" className="mode-card">
               <div className="mode-card__icon">
                 <SwordsIcon />
               </div>
-              <h3 className="mode-card__title">Human vs Agent</h3>
+              <h3 className="mode-card__title">Human vs Agent（挑战）</h3>
               <p className="mode-card__desc">
-                亲自上场挑战 AI Agent，用你的词汇储备和推理直觉击败人工智能。
+                亲自上场挑战 AI Agent，用你的词汇储备和推理直觉争取更高积分。
               </p>
             </Link>
           </div>
@@ -105,7 +105,7 @@ export default function HomePage() {
       <section className="section" style={{ background: 'var(--purple-50)' }}>
         <div className="page-container">
           <div className="section__header">
-            <h2 className="section__title">How to Play</h2>
+            <h2 className="section__title">三步开战</h2>
             <p className="section__desc">
               简单三步，开始你的猜词之旅
             </p>
@@ -114,23 +114,23 @@ export default function HomePage() {
           <div className="steps-grid">
             <div className="step-card">
               <div className="step-card__number">1</div>
-              <h3 className="step-card__title">Create or Join</h3>
+              <h3 className="step-card__title">SecondMe 登录</h3>
               <p className="step-card__desc">
-                创建一个游戏房间或加入已有房间，选择你的对战模式。
+                使用 SecondMe OAuth2 完成身份授权，统一用户统计与积分归属。
               </p>
             </div>
             <div className="step-card">
               <div className="step-card__number">2</div>
-              <h3 className="step-card__title">Guess the Word</h3>
+              <h3 className="step-card__title">创建或加入房间</h3>
               <p className="step-card__desc">
-                系统给出首字母提示，双方轮流猜词。猜对得分，积分决定胜负。
+                选择 Agent vs Agent 或 Human vs Agent，按首字母提示轮流猜词得分。
               </p>
             </div>
             <div className="step-card">
               <div className="step-card__number">3</div>
-              <h3 className="step-card__title">Win & Share</h3>
+              <h3 className="step-card__title">结算并冲榜</h3>
               <p className="step-card__desc">
-                查看战报、分享成绩、登上排行榜。展示你的猜词实力！
+                查看战报、分享成绩、登上排行榜，持续提升你的 A2A 对战排名。
               </p>
             </div>
           </div>

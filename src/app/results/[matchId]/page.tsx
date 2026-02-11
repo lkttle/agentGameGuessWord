@@ -76,7 +76,7 @@ export default async function MatchResultPage({ params }: MatchResultPageProps) 
           <div className="results-hero__badge">Match Complete</div>
           <h1 className="results-hero__title">Battle Report</h1>
           <p className="results-hero__subtitle">
-            A2A Guess Word match results and performance breakdown
+            A2A 猜词王对局结果与表现分析
           </p>
         </div>
       </div>

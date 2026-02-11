@@ -55,8 +55,8 @@ export default function LeaderboardPage() {
   return (
     <div className="page-container">
       <div className="leaderboard-header">
-        <h1 className="section__title">Leaderboard</h1>
-        <p className="section__desc">Top players ranked by total score</p>
+        <h1 className="section__title">排行榜</h1>
+        <p className="section__desc">核心用户来自 SecondMe，按积分实时更新</p>
       </div>
 
       <div className="leaderboard-tabs">
@@ -65,14 +65,14 @@ export default function LeaderboardPage() {
           className={`leaderboard-tab ${period === LEADERBOARD_PERIODS.ALL_TIME ? 'leaderboard-tab--active' : ''}`}
           onClick={() => setPeriod(LEADERBOARD_PERIODS.ALL_TIME)}
         >
-          All Time
+          总榜
         </button>
         <button
           type="button"
           className={`leaderboard-tab ${period === LEADERBOARD_PERIODS.DAILY ? 'leaderboard-tab--active' : ''}`}
           onClick={() => setPeriod(LEADERBOARD_PERIODS.DAILY)}
         >
-          Today
+          今日
         </button>
       </div>
 
@@ -92,10 +92,10 @@ export default function LeaderboardPage() {
               <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" />
             </svg>
           </div>
-          <h3 className="empty-state__title">No Rankings Yet</h3>
-          <p className="empty-state__desc">Play some games to appear on the leaderboard!</p>
+          <h3 className="empty-state__title">暂无榜单</h3>
+          <p className="empty-state__desc">暂时还没有榜单数据，去完成一局对战吧！</p>
           <Link href="/play" className="btn btn--primary mt-lg" style={{ display: 'inline-flex' }}>
-            Play Now
+            立即开战
           </Link>
         </div>
       ) : (
@@ -107,13 +107,13 @@ export default function LeaderboardPage() {
               </div>
               <div className="leaderboard-item__info">
                 <div className="leaderboard-item__name">
-                  {entry.user.name || entry.user.secondmeUserId || 'Anonymous'}
+                  {entry.user.name || entry.user.secondmeUserId || '匿名用户'}
                 </div>
                 <div className="leaderboard-item__record">
-                  {entry.wins}W / {entry.losses}L
+                  {entry.wins} 胜 / {entry.losses} 负
                 </div>
               </div>
-              <div className="leaderboard-item__score">{entry.score}</div>
+              <div className="leaderboard-item__score">{entry.score} 分</div>
             </div>
           ))}
         </div>
