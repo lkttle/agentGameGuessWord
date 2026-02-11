@@ -113,6 +113,7 @@ export async function POST(
     participantId: string;
     guessWord: string;
     usedFallback: boolean;
+    fromCache: boolean;
     result: ReturnType<typeof evaluateRound>;
   }> = [];
 
@@ -144,6 +145,7 @@ export async function POST(
             participantId: participant.id,
             guessWord: cached.replyText,
             usedFallback: false,
+            fromCache: true,
             attempts: 1
           });
           continue;
@@ -164,7 +166,7 @@ export async function POST(
         { timeoutMs: 15000, maxRetries: 1 }
       );
 
-      rawTurns.push({ participantId: participant.id, ...turn });
+      rawTurns.push({ participantId: participant.id, fromCache: false, ...turn });
     }
 
     for (let index = 0; index < rawTurns.length; index += 1) {
@@ -184,6 +186,7 @@ export async function POST(
         participantId: turn.participantId ?? '',
         guessWord: rawResponse,
         usedFallback: turn.usedFallback,
+        fromCache: Boolean(turn.fromCache),
         result
       });
 

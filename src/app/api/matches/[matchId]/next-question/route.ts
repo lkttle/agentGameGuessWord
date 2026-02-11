@@ -38,5 +38,12 @@ export async function POST(
     return NextResponse.json({ error: 'No question available' }, { status: 409 });
   }
 
-  return NextResponse.json({ question });
+  const queuePending = await prisma.matchQuestion.count({
+    where: {
+      matchId,
+      consumedAt: null
+    }
+  });
+
+  return NextResponse.json({ question, debug: { queuePending } });
 }
