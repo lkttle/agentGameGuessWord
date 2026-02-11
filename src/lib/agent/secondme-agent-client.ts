@@ -85,7 +85,24 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
       ? context.pinyinHint.toUpperCase()
       : context.hint.replace(/_/g, '').toUpperCase();
 
-    const prompt = `我想和你玩一个游戏，我说词语的拼音首字母，你来猜对应的中文词语。比如我说"PY"，你可以猜"朋友"；我说"CF"，你可以猜"吃饭"。现在游戏开始，"${pinyinInitials}"，请直接给出你的猜测。`;
+    const categoryHint = context.categoryHint?.trim();
+    const recentGuesses = context.previousGuesses
+      .map((word) => word.trim())
+      .filter((word) => word.length > 0)
+      .slice(-6);
+
+    const categoryPrompt = categoryHint ? `词语类别提示：${categoryHint}。\n` : '';
+    const previousGuessesPrompt = recentGuesses.length > 0
+      ? `已猜过（尽量不要重复）：${recentGuesses.join('、')}。\n`
+      : '';
+
+    const prompt = [
+      '你正在参加中文猜词游戏。',
+      `拼音首字母提示：${pinyinInitials}。`,
+      categoryPrompt,
+      previousGuessesPrompt,
+      '请直接输出一个最可能的中文词语（2-4个汉字），不要解释。'
+    ].join('');
 
     // Get existing session ID for continuity
     let sessionId: string | undefined;

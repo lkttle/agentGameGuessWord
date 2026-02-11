@@ -22,6 +22,7 @@ interface HumanMoveBody {
   guessWord?: string;
   roundIndex?: number;
   pinyinHint?: string;
+  categoryHint?: string;
 }
 
 function isValidGuess(input: string): boolean {
@@ -115,6 +116,7 @@ export async function POST(
         roundIndex,
         hint: `${targetWord[0]}${'_'.repeat(Math.max(targetWord.length - 1, 0))}`,
         pinyinHint: body.pinyinHint ?? undefined,
+        categoryHint: body.categoryHint?.trim() || undefined,
         previousGuesses: [...previousGuesses]
       },
       client,

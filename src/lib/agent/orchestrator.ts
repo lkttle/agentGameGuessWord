@@ -4,6 +4,7 @@ export interface AgentTurnContext {
   roundIndex: number;
   hint: string;
   pinyinHint?: string;
+  categoryHint?: string;
   previousGuesses: string[];
   instruction?: string;
   timeoutMs?: number;

@@ -18,6 +18,7 @@ interface AgentRoundBody {
   targetWord?: string;
   roundIndex?: number;
   pinyinHint?: string;
+  categoryHint?: string;
 }
 
 export async function POST(
@@ -76,7 +77,13 @@ export async function POST(
 
   const rawTurns = await runAgentTurnsWithRetry(
     agents.map((agent) => agent.id),
-    { roundIndex, hint, pinyinHint: body.pinyinHint ?? undefined, previousGuesses: [] },
+    {
+      roundIndex,
+      hint,
+      pinyinHint: body.pinyinHint ?? undefined,
+      categoryHint: body.categoryHint?.trim() || undefined,
+      previousGuesses: []
+    },
     client,
     { timeoutMs: 15000, maxRetries: 1 }
   );
