@@ -20,4 +20,4 @@
 
 - [x] 4.1 Run prisma generate, typecheck, build
 - [x] 4.2 Update tasks completion states
-- [ ] 4.3 Commit and push to remote
+- [x] 4.3 Commit and push to remote
