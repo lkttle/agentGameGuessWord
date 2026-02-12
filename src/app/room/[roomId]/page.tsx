@@ -155,9 +155,15 @@ let ttsSessionVersion = 0;
 let audioUnlocked = false;
 let audioUnlockPromise: Promise<void> | null = null;
 const MAX_TTS_ATTEMPTS = 3;
-const AGENT_REPLY_GAP_MS = 2000;
+const AGENT_REPLY_GAP_MS = 300;
 const MAX_FAILED_ROUNDS_BEFORE_REVEAL = 3;
 const SILENT_AUDIO_DATA_URL = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=';
+
+interface PlayTTSOptions {
+  userId?: string | null;
+  participantId?: string;
+  onPlaybackStart?: (payload: { durationMs: number | null }) => void;
+}
 
 function getReusableAudio(): HTMLAudioElement {
   if (!reusableAudioElement) {
@@ -296,7 +302,7 @@ async function drainTtsQueue() {
 
 async function playTTS(
   text: string,
-  options?: { userId?: string | null; participantId?: string }
+  options?: PlayTTSOptions
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const sessionVersion = ttsSessionVersion;
@@ -370,6 +376,8 @@ async function playTTS(
 
         const json = await res.json();
         const url = json?.data?.url;
+        const durationMs =
+          typeof json?.data?.durationMs === 'number' ? json.data.durationMs : null;
 
         if (sessionVersion !== ttsSessionVersion) {
           return settle(false);
@@ -378,7 +386,7 @@ async function playTTS(
         ttsClientLog('request_success', {
           requestId: json?.requestId ?? res.headers.get('x-tts-request-id') ?? null,
           hasUrl: Boolean(url),
-          durationMs: json?.data?.durationMs ?? null
+          durationMs
         });
         if (!url) {
           ttsClientLog('request_missing_url', { response: json });
@@ -418,6 +426,13 @@ async function playTTS(
         });
 
         const played = await new Promise<boolean>((audioResolve) => {
+          let playbackStartNotified = false;
+          const notifyPlaybackStart = () => {
+            if (playbackStartNotified) return;
+            playbackStartNotified = true;
+            options?.onPlaybackStart?.({ durationMs });
+          };
+
           const fallbackTimer = setTimeout(() => {
             audio.pause();
             if (blobUrl) {
@@ -474,28 +489,41 @@ async function playTTS(
             });
             audioResolve(false);
           };
-          audio.play().catch((error) => {
-            clearTimeout(fallbackTimer);
-            audio.pause();
-            if (blobUrl) {
-              URL.revokeObjectURL(blobUrl);
-              blobUrl = null;
-            }
-            if (activeAudioElement === audio) {
-              activeAudioElement = null;
-            }
 
-            if (!audioUnlocked) {
-              void unlockAudioPlayback('play_rejected_retry');
-            }
+          const playResult = audio.play();
+          if (playResult && typeof playResult.then === 'function') {
+            playResult
+              .then(() => {
+                if (sessionVersion === ttsSessionVersion) {
+                  notifyPlaybackStart();
+                }
+              })
+              .catch((error) => {
+                clearTimeout(fallbackTimer);
+                audio.pause();
+                if (blobUrl) {
+                  URL.revokeObjectURL(blobUrl);
+                  blobUrl = null;
+                }
+                if (activeAudioElement === audio) {
+                  activeAudioElement = null;
+                }
 
-            ttsClientLog('audio_play_rejected', {
-              participantId: options?.participantId ?? null,
-              audioUnlocked,
-              error: error instanceof Error ? error.message : String(error)
-            });
-            audioResolve(false);
-          });
+                if (!audioUnlocked) {
+                  void unlockAudioPlayback('play_rejected_retry');
+                }
+
+                ttsClientLog('audio_play_rejected', {
+                  participantId: options?.participantId ?? null,
+                  audioUnlocked,
+                  error: error instanceof Error ? error.message : String(error)
+                });
+                audioResolve(false);
+              });
+            return;
+          }
+
+          notifyPlaybackStart();
         });
 
         return settle(played);
@@ -518,7 +546,7 @@ async function playTTS(
 
 async function playTTSWithRetry(
   text: string,
-  options?: { userId?: string | null; participantId?: string }
+  options?: PlayTTSOptions
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= MAX_TTS_ATTEMPTS; attempt += 1) {
     ttsClientLog('retry_attempt', {
@@ -639,6 +667,7 @@ export default function RoomPage() {
     text: string;
     userId?: string | null;
     participantId?: string;
+    questionKey?: string;
   }>>([]);
   const revealProcessingRef = useRef(false);
   const revealInitializedRef = useRef(false);
@@ -650,6 +679,8 @@ export default function RoomPage() {
   const autoAgentRunningRef = useRef(false);
   const currentQuestionKeyRef = useRef('');
   const [revealedAgentLogIds, setRevealedAgentLogIds] = useState<string[]>([]);
+  const [agentRevealTextMap, setAgentRevealTextMap] = useState<Record<string, string>>({});
+  const agentRevealTimersRef = useRef(new Map<string, ReturnType<typeof setInterval>>());
 
   const revealAgentLog = useCallback((logId: string) => {
     if (revealedAgentLogIdsRef.current.has(logId)) return;
@@ -657,40 +688,151 @@ export default function RoomPage() {
     setRevealedAgentLogIds((prev) => (prev.includes(logId) ? prev : [...prev, logId]));
   }, []);
 
+  const clearAgentRevealTimers = useCallback(() => {
+    for (const timer of agentRevealTimersRef.current.values()) {
+      clearInterval(timer);
+    }
+    agentRevealTimersRef.current.clear();
+    setAgentRevealTextMap({});
+  }, []);
+
+  const startAgentTextReveal = useCallback((
+    logId: string,
+    fullText: string,
+    durationMs: number | null
+  ) => {
+    const text = fullText.trim();
+    const existingTimer = agentRevealTimersRef.current.get(logId);
+    if (existingTimer) {
+      clearInterval(existingTimer);
+      agentRevealTimersRef.current.delete(logId);
+    }
+
+    if (!text) {
+      setAgentRevealTextMap((prev) => {
+        if (!(logId in prev)) return prev;
+        const next = { ...prev };
+        delete next[logId];
+        return next;
+      });
+      return;
+    }
+
+    const chars = Array.from(text);
+    if (chars.length <= 1) {
+      setAgentRevealTextMap((prev) => (prev[logId] === text ? prev : { ...prev, [logId]: text }));
+      return;
+    }
+
+    const targetDuration = Math.max(900, Math.min(6000, durationMs ?? chars.length * 220));
+    const stepMs = Math.max(60, Math.floor(targetDuration / chars.length));
+    let index = 0;
+
+    setAgentRevealTextMap((prev) => ({ ...prev, [logId]: '' }));
+
+    const timer = setInterval(() => {
+      if (!pageActiveRef.current) {
+        clearInterval(timer);
+        agentRevealTimersRef.current.delete(logId);
+        return;
+      }
+
+      index += 1;
+      const nextText = chars.slice(0, index).join('');
+      setAgentRevealTextMap((prev) => (prev[logId] === nextText ? prev : { ...prev, [logId]: nextText }));
+
+      if (index >= chars.length) {
+        clearInterval(timer);
+        agentRevealTimersRef.current.delete(logId);
+      }
+    }, stepMs);
+
+    agentRevealTimersRef.current.set(logId, timer);
+  }, []);
+
   const processRevealQueue = useCallback(async () => {
     if (!pageActiveRef.current || revealProcessingRef.current) return;
     revealProcessingRef.current = true;
+    const revealSessionVersion = ttsSessionVersion;
     ttsClientLog('reveal_queue_start', {
-      queueLength: revealQueueRef.current.length
+      queueLength: revealQueueRef.current.length,
+      sessionVersion: revealSessionVersion
     });
 
     while (pageActiveRef.current && revealQueueRef.current.length > 0) {
+      if (revealSessionVersion !== ttsSessionVersion) {
+        ttsClientLog('reveal_queue_session_changed_break', {
+          queueLeft: revealQueueRef.current.length,
+          sessionVersion: revealSessionVersion,
+          currentSessionVersion: ttsSessionVersion
+        });
+        break;
+      }
+
       const next = revealQueueRef.current.shift();
       if (!next) continue;
+
+      if (
+        next.questionKey &&
+        currentQuestionKeyRef.current &&
+        next.questionKey !== currentQuestionKeyRef.current
+      ) {
+        ttsClientLog('reveal_skip_stale_question', {
+          logId: next.id,
+          queueQuestionKey: next.questionKey,
+          currentQuestionKey: currentQuestionKeyRef.current
+        });
+        continue;
+      }
 
       ttsClientLog('reveal_next', {
         logId: next.id,
         participantId: next.participantId ?? null,
         queueLeft: revealQueueRef.current.length
       });
-      revealAgentLog(next.id);
+
+      let textShown = false;
+      const revealTextNow = (durationMs: number | null) => {
+        if (textShown) return;
+        textShown = true;
+        revealAgentLog(next.id);
+        startAgentTextReveal(next.id, next.text, durationMs);
+      };
+
+      const revealFallbackTimer = setTimeout(() => {
+        revealTextNow(null);
+      }, 900);
+
       const played = await playTTSWithRetry(next.text, {
         userId: next.userId,
-        participantId: next.participantId
+        participantId: next.participantId,
+        onPlaybackStart: ({ durationMs }) => {
+          clearTimeout(revealFallbackTimer);
+          revealTextNow(durationMs);
+        }
       });
+
+      clearTimeout(revealFallbackTimer);
+      if (!textShown) {
+        revealTextNow(null);
+      }
+
       playedAgentLogIdsRef.current.add(next.id);
       ttsClientLog('reveal_tts_result', {
         logId: next.id,
         participantId: next.participantId ?? null,
         played
       });
-      if (!pageActiveRef.current) break;
-      await sleep(AGENT_REPLY_GAP_MS);
+
+      if (!pageActiveRef.current || revealSessionVersion !== ttsSessionVersion) break;
+      if (revealQueueRef.current.length > 0) {
+        await sleep(AGENT_REPLY_GAP_MS);
+      }
     }
 
     revealProcessingRef.current = false;
     ttsClientLog('reveal_queue_end');
-  }, [revealAgentLog]);
+  }, [revealAgentLog, startAgentTextReveal]);
 
   // Compute scores from round logs
   const scores = new Map<string, number>();
@@ -721,8 +863,9 @@ export default function RoomPage() {
     revealProcessingRef.current = false;
     autoAgentRunningRef.current = false;
     turnSkippingRef.current = true;
+    clearAgentRevealTimers();
     stopAllTTSPlayback();
-  }, []);
+  }, [clearAgentRevealTimers]);
 
   const fetchRoom = useCallback(async () => {
     if (!pageActiveRef.current) return;
@@ -742,6 +885,9 @@ export default function RoomPage() {
     }
 
     switchingQuestionRef.current = true;
+    revealQueueRef.current = [];
+    revealProcessingRef.current = false;
+    clearAgentRevealTimers();
     stopAllTTSPlayback();
 
     try {
@@ -771,7 +917,7 @@ export default function RoomPage() {
     } finally {
       switchingQuestionRef.current = false;
     }
-  }, []);
+  }, [clearAgentRevealTimers]);
 
   const markFailedRoundAndMaybeSwitchQuestion = useCallback(async () => {
     if (!pageActiveRef.current) return;
@@ -978,7 +1124,8 @@ export default function RoomPage() {
         id: log.id,
         text,
         userId: player.ownerUserId ?? player.userId,
-        participantId: player.id
+        participantId: player.id,
+        questionKey: currentQuestionKeyRef.current
       });
       ttsClientLog('queue_push', {
         logId: log.id,
@@ -1000,11 +1147,12 @@ export default function RoomPage() {
     revealProcessingRef.current = false;
     revealInitializedRef.current = false;
     setRevealedAgentLogIds([]);
+    clearAgentRevealTimers();
     setAnswerRevealText('');
     failedRoundsRef.current = 0;
     setFailedRounds(0);
     stopAllTTSPlayback();
-  }, [match?.id]);
+  }, [match?.id, clearAgentRevealTimers]);
 
   useEffect(() => {
     if (room?.status === 'FINISHED') {
@@ -1253,8 +1401,9 @@ export default function RoomPage() {
       const player = participants.find(p => p.id === log.actorId);
       const isAgent = player?.participantType === PARTICIPANT_TYPES.AGENT;
       if (isAgent && !revealedAgentLogSet.has(log.id)) continue;
+      const renderedGuessWord = isAgent ? (agentRevealTextMap[log.id] ?? log.guessWord) : log.guessWord;
       latestAnswers.set(log.actorId, {
-        guessWord: log.guessWord,
+        guessWord: renderedGuessWord,
         isCorrect: log.isCorrect,
         roundIndex: log.roundIndex,
       });
