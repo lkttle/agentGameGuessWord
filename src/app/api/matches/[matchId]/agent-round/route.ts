@@ -20,6 +20,7 @@ interface AgentRoundBody {
   pinyinHint?: string;
   categoryHint?: string;
   questionKey?: string;
+  participantId?: string;
 }
 
 export async function POST(
@@ -65,6 +66,14 @@ export async function POST(
     return NextResponse.json({ error: 'At least 1 agent participant required' }, { status: 400 });
   }
 
+  const selectedAgents = body.participantId
+    ? agents.filter((participant) => participant.id === body.participantId)
+    : agents;
+
+  if (body.participantId && selectedAgents.length < 1) {
+    return NextResponse.json({ error: 'participantId is not a valid agent in this room' }, { status: 400 });
+  }
+
   const roundIndex = body.roundIndex ?? match.totalRounds + 1;
   const serverQuestionKey = [
     body.pinyinHint?.trim() ?? '',
@@ -95,7 +104,7 @@ export async function POST(
   const rawTurns = [];
   const previousGuesses: string[] = [];
 
-  for (const agent of agents) {
+  for (const agent of selectedAgents) {
     const turn = await runAgentTurnWithRetry(
       agent.id,
       {

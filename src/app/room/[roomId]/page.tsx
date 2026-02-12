@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   GAME_MODES,
   PARTICIPANT_TYPES,
@@ -156,7 +156,6 @@ let audioUnlocked = false;
 let audioUnlockPromise: Promise<void> | null = null;
 const MAX_TTS_ATTEMPTS = 3;
 const AGENT_REPLY_GAP_MS = 300;
-const MAX_FAILED_ROUNDS_BEFORE_REVEAL = 3;
 const SILENT_AUDIO_DATA_URL = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=';
 
 interface PlayTTSOptions {
@@ -649,11 +648,16 @@ export default function RoomPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [guessWord, setGuessWord] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState<PinyinQuestion | null>(null);
-  const [failedRounds, setFailedRounds] = useState(0);
-  const [answerRevealText, setAnswerRevealText] = useState('');
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [timerStarted, setTimerStarted] = useState(false);
   const [turnTimeLeft, setTurnTimeLeft] = useState<number | null>(null);
+  const [currentTurnParticipantId, setCurrentTurnParticipantId] = useState<string | null>(null);
+  const currentTurnParticipantIdRef = useRef<string | null>(null);
+  const nextQuestionStarterIdRef = useRef<string | null>(null);
+  const answeredParticipantsRef = useRef(new Set<string>());
+  const [activeRoundIndex, setActiveRoundIndex] = useState(1);
+  const activeRoundIndexRef = useRef(1);
+  const currentRoundLogIdsRef = useRef(new Set<string>());
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const turnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -674,7 +678,6 @@ export default function RoomPage() {
   const pageActiveRef = useRef(true);
   const runningActionRef = useRef(false);
   const playedAgentLogIdsRef = useRef(new Set<string>());
-  const failedRoundsRef = useRef(0);
   const switchingQuestionRef = useRef(false);
   const autoAgentRunningRef = useRef(false);
   const currentQuestionKeyRef = useRef('');
@@ -848,7 +851,27 @@ export default function RoomPage() {
   const participants = room?.participants ?? [];
 
   const humanParticipant = participants.find(p => p.participantType === PARTICIPANT_TYPES.HUMAN);
-  const agentParticipants = participants.filter(p => p.participantType === PARTICIPANT_TYPES.AGENT);
+  const orderedParticipants = useMemo(() => {
+    const base = [...participants].sort((a, b) => a.seatOrder - b.seatOrder);
+    if (room?.mode === GAME_MODES.AGENT_VS_AGENT) {
+      return base.filter((participant) => participant.participantType === PARTICIPANT_TYPES.AGENT);
+    }
+    return base;
+  }, [participants, room?.mode]);
+
+  const getNextParticipantId = useCallback((participantId: string | null): string | null => {
+    if (!participantId || orderedParticipants.length < 1) {
+      return orderedParticipants[0]?.id ?? null;
+    }
+    const index = orderedParticipants.findIndex((participant) => participant.id === participantId);
+    if (index < 0) {
+      return orderedParticipants[0]?.id ?? null;
+    }
+    return orderedParticipants[(index + 1) % orderedParticipants.length]?.id ?? null;
+  }, [orderedParticipants]);
+
+  const currentTurnParticipant = orderedParticipants.find((participant) => participant.id === currentTurnParticipantId) ?? null;
+  const isHumanTurn = currentTurnParticipant?.participantType === PARTICIPANT_TYPES.HUMAN;
 
   // Rank participants by score
   const rankedParticipants = [...participants].sort(
@@ -879,7 +902,7 @@ export default function RoomPage() {
   }, [roomId]);
 
   // Fetch a new question from the API
-  const fetchQuestion = useCallback(async () => {
+  const fetchQuestion = useCallback(async (mode: 'initial' | 'next' = 'next') => {
     if (switchingQuestionRef.current) {
       return;
     }
@@ -889,6 +912,22 @@ export default function RoomPage() {
     revealProcessingRef.current = false;
     clearAgentRevealTimers();
     stopAllTTSPlayback();
+    answeredParticipantsRef.current.clear();
+    currentRoundLogIdsRef.current.clear();
+
+    const nextRoundIndex = mode === 'initial'
+      ? (match?.totalRounds ?? 0) + 1
+      : activeRoundIndexRef.current + 1;
+    activeRoundIndexRef.current = nextRoundIndex;
+    setActiveRoundIndex(nextRoundIndex);
+
+    let nextStarterId = nextQuestionStarterIdRef.current;
+    if (!nextStarterId || !orderedParticipants.some((participant) => participant.id === nextStarterId)) {
+      nextStarterId = orderedParticipants[0]?.id ?? null;
+      nextQuestionStarterIdRef.current = nextStarterId;
+    }
+    currentTurnParticipantIdRef.current = nextStarterId;
+    setCurrentTurnParticipantId(nextStarterId);
 
     try {
       const res = await api<{ questions: PinyinQuestion[] }>('/api/questions/generate', {
@@ -896,13 +935,9 @@ export default function RoomPage() {
         body: JSON.stringify({ count: 1 })
       });
       if (!pageActiveRef.current) return;
-        if (res.questions.length > 0) {
-          setCurrentQuestion(res.questions[0]);
-          setAnswerRevealText('');
-          switchingQuestionRef.current = false;
-          failedRoundsRef.current = 0;
-          setFailedRounds(0);
-        }
+      if (res.questions.length > 0) {
+        setCurrentQuestion(res.questions[0]);
+      }
     } catch {
       if (!pageActiveRef.current) return;
       setCurrentQuestion({
@@ -911,55 +946,83 @@ export default function RoomPage() {
         answer: '吃饭',
         category: '动作'
       });
-      setAnswerRevealText('');
-      failedRoundsRef.current = 0;
-      setFailedRounds(0);
     } finally {
       switchingQuestionRef.current = false;
     }
-  }, [clearAgentRevealTimers]);
+  }, [clearAgentRevealTimers, match?.totalRounds, orderedParticipants]);
 
-  const markFailedRoundAndMaybeSwitchQuestion = useCallback(async () => {
-    if (!pageActiveRef.current) return;
+  const appendCurrentRoundLogIds = useCallback((logs: RoundLogEntry[]) => {
+    const nextIds: string[] = [];
+    for (const log of logs) {
+      if (log.roundIndex !== activeRoundIndexRef.current) {
+        continue;
+      }
+      if (!currentRoundLogIdsRef.current.has(log.id)) {
+        currentRoundLogIdsRef.current.add(log.id);
+        nextIds.push(log.id);
+      }
+    }
 
-    const nextFailedRounds = failedRoundsRef.current + 1;
-    failedRoundsRef.current = nextFailedRounds;
-    setFailedRounds(nextFailedRounds);
+    if (nextIds.length > 0) {
+      ttsClientLog('current_round_logs_append', {
+        roundIndex: activeRoundIndexRef.current,
+        appendedCount: nextIds.length
+      });
+    }
+  }, []);
 
-    if (nextFailedRounds < MAX_FAILED_ROUNDS_BEFORE_REVEAL || switchingQuestionRef.current) {
+  const finalizeTurnAndMaybeSwitchQuestion = useCallback(async (
+    actorParticipantId: string,
+    isCorrect: boolean,
+    questionKey?: string
+  ) => {
+    if (questionKey && currentQuestionKeyRef.current !== questionKey) {
       return;
     }
 
-    const answer = currentQuestion?.answer ?? '';
-    if (answer) {
-      setAnswerRevealText(`连续 ${MAX_FAILED_ROUNDS_BEFORE_REVEAL} 轮无人答中，正确答案：${answer}`);
-    }
+    const nextParticipantId = getNextParticipantId(actorParticipantId);
 
-    await sleep(2500);
-    if (!pageActiveRef.current) return;
-
-    await fetchQuestion();
-  }, [currentQuestion?.answer, fetchQuestion]);
-
-  const handleRoundOutcome = useCallback(async (anyCorrect: boolean, questionKey?: string) => {
-    if (
-      questionKey &&
-      currentQuestionKeyRef.current !== questionKey
-    ) {
+    if (isCorrect) {
+      nextQuestionStarterIdRef.current = nextParticipantId;
+      await fetchQuestion('next');
       return;
     }
 
-    if (anyCorrect) {
-      stopAllTTSPlayback();
-      await fetchQuestion();
+    answeredParticipantsRef.current.add(actorParticipantId);
+    const hasCompletedOneRound = answeredParticipantsRef.current.size >= Math.max(1, orderedParticipants.length);
+
+    if (hasCompletedOneRound) {
+      nextQuestionStarterIdRef.current = nextParticipantId;
+      await fetchQuestion('next');
       return;
     }
-    await markFailedRoundAndMaybeSwitchQuestion();
-  }, [fetchQuestion, markFailedRoundAndMaybeSwitchQuestion]);
+
+    currentTurnParticipantIdRef.current = nextParticipantId;
+    setCurrentTurnParticipantId(nextParticipantId);
+  }, [fetchQuestion, getNextParticipantId, orderedParticipants.length]);
 
   useEffect(() => {
     currentQuestionKeyRef.current = questionToKey(currentQuestion);
   }, [currentQuestion]);
+
+  useEffect(() => {
+    if (orderedParticipants.length < 1) {
+      currentTurnParticipantIdRef.current = null;
+      nextQuestionStarterIdRef.current = null;
+      setCurrentTurnParticipantId(null);
+      return;
+    }
+
+    if (!nextQuestionStarterIdRef.current || !orderedParticipants.some((participant) => participant.id === nextQuestionStarterIdRef.current)) {
+      nextQuestionStarterIdRef.current = orderedParticipants[0].id;
+    }
+
+    if (!currentTurnParticipantId || !orderedParticipants.some((participant) => participant.id === currentTurnParticipantId)) {
+      const starterId = nextQuestionStarterIdRef.current;
+      currentTurnParticipantIdRef.current = starterId;
+      setCurrentTurnParticipantId(starterId);
+    }
+  }, [orderedParticipants, currentTurnParticipantId]);
 
   // Load session + initial room state
   useEffect(() => {
@@ -976,7 +1039,7 @@ export default function RoomPage() {
   // Fetch first question when match starts
   useEffect(() => {
     if (room?.status === 'RUNNING' && !currentQuestion) {
-      void fetchQuestion();
+      void fetchQuestion('initial');
     }
   }, [room?.status, currentQuestion, fetchQuestion]);
 
@@ -1013,38 +1076,63 @@ export default function RoomPage() {
     }
   }, [timeLeft, room?.status, isHost]);
 
-  // Per-turn 20s timer - start when match is running and no active action
+  // Per-turn 20s timer - restart on participant turn change
   useEffect(() => {
-    if (room?.status !== 'RUNNING' || !currentQuestion || isSubmitting || !!busy || Boolean(answerRevealText)) {
+    if (room?.status !== 'RUNNING' || !currentQuestion || !currentTurnParticipantId || isSubmitting || !!busy) {
       if (turnTimerRef.current) clearInterval(turnTimerRef.current);
       setTurnTimeLeft(null);
       return;
     }
+
     setTurnTimeLeft(20);
     turnSkippingRef.current = false;
     turnTimerRef.current = setInterval(() => {
-      setTurnTimeLeft(prev => {
+      setTurnTimeLeft((prev) => {
         if (prev === null || prev <= 1) return 0;
         return prev - 1;
       });
     }, 1000);
+
     return () => {
       if (turnTimerRef.current) clearInterval(turnTimerRef.current);
     };
-  }, [room?.status, currentQuestion, match?.roundLogs?.length, isSubmitting, busy, answerRevealText]);
+  }, [room?.status, currentQuestion, currentTurnParticipantId, isSubmitting, busy]);
 
   // Auto-skip turn when per-turn timer reaches 0
   useEffect(() => {
-    if (turnTimeLeft !== 0 || !currentQuestion || room?.status !== 'RUNNING' || turnSkippingRef.current || isSubmitting || !!busy || Boolean(answerRevealText)) return;
+    if (
+      turnTimeLeft !== 0 ||
+      !currentQuestion ||
+      room?.status !== 'RUNNING' ||
+      turnSkippingRef.current ||
+      isSubmitting ||
+      !!busy ||
+      !currentTurnParticipant
+    ) {
+      return;
+    }
+
     turnSkippingRef.current = true;
     if (turnTimerRef.current) clearInterval(turnTimerRef.current);
-    if (room.mode === GAME_MODES.AGENT_VS_AGENT) {
-      void handleAgentRound();
-    } else {
-      // In HUMAN_VS_AGENT, auto-trigger agent round (skip human turn)
-      void handleAgentRoundOnly();
+
+    const questionKey = currentQuestionKeyRef.current;
+    if (currentTurnParticipant.participantType === PARTICIPANT_TYPES.AGENT) {
+      void handleAgentTurn(currentTurnParticipant.id, '超时，Agent 回答中...');
+      return;
     }
-  }, [turnTimeLeft, room?.status, currentQuestion, isSubmitting, busy, answerRevealText]);
+
+    if (questionKey) {
+      void finalizeTurnAndMaybeSwitchQuestion(currentTurnParticipant.id, false, questionKey);
+    }
+  }, [
+    turnTimeLeft,
+    room?.status,
+    currentQuestion,
+    currentTurnParticipant,
+    isSubmitting,
+    busy,
+    finalizeTurnAndMaybeSwitchQuestion
+  ]);
 
   // Polling
   useEffect(() => {
@@ -1074,10 +1162,6 @@ export default function RoomPage() {
     };
   }, [stopRoomRuntime]);
 
-  useEffect(() => {
-    failedRoundsRef.current = failedRounds;
-  }, [failedRounds]);
-
   // Auto-scroll chat log
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1092,8 +1176,15 @@ export default function RoomPage() {
 
       for (const log of match.roundLogs) {
         knownLogIdsRef.current.add(log.id);
+        if (log.roundIndex === activeRoundIndexRef.current) {
+          currentRoundLogIdsRef.current.add(log.id);
+        }
+
         const player = participants.find((participant) => participant.id === log.actorId);
-        if (player?.participantType === PARTICIPANT_TYPES.AGENT) {
+        if (
+          player?.participantType === PARTICIPANT_TYPES.AGENT &&
+          log.roundIndex === activeRoundIndexRef.current
+        ) {
           revealAgentLog(log.id);
         }
       }
@@ -1106,12 +1197,20 @@ export default function RoomPage() {
 
     ttsClientLog('new_logs_detected', {
       count: newLogs.length,
-      totalLogs: match.roundLogs.length
+      totalLogs: match.roundLogs.length,
+      activeRoundIndex: activeRoundIndexRef.current
     });
+
+    appendCurrentRoundLogIds(newLogs);
 
     for (const log of newLogs) {
       knownLogIdsRef.current.add(log.id);
-      const player = participants.find(p => p.id === log.actorId);
+
+      if (log.roundIndex !== activeRoundIndexRef.current) {
+        continue;
+      }
+
+      const player = participants.find((participant) => participant.id === log.actorId);
       if (player?.participantType !== PARTICIPANT_TYPES.AGENT) continue;
 
       const text = log.guessWord?.trim() ?? '';
@@ -1137,7 +1236,7 @@ export default function RoomPage() {
     if (revealQueueRef.current.length > 0) {
       void processRevealQueue();
     }
-  }, [match?.roundLogs, participants, processRevealQueue, revealAgentLog]);
+  }, [match?.roundLogs, participants, processRevealQueue, revealAgentLog, appendCurrentRoundLogIds]);
 
   useEffect(() => {
     revealedAgentLogIdsRef.current.clear();
@@ -1146,13 +1245,22 @@ export default function RoomPage() {
     revealQueueRef.current = [];
     revealProcessingRef.current = false;
     revealInitializedRef.current = false;
+    answeredParticipantsRef.current.clear();
+    currentRoundLogIdsRef.current.clear();
     setRevealedAgentLogIds([]);
     clearAgentRevealTimers();
-    setAnswerRevealText('');
-    failedRoundsRef.current = 0;
-    setFailedRounds(0);
     stopAllTTSPlayback();
-  }, [match?.id, clearAgentRevealTimers]);
+
+    const starterId = orderedParticipants[0]?.id ?? null;
+    nextQuestionStarterIdRef.current = starterId;
+    currentTurnParticipantIdRef.current = starterId;
+    setCurrentTurnParticipantId(starterId);
+    setCurrentQuestion(null);
+
+    const nextRoundIndex = (match?.totalRounds ?? 0) + 1;
+    activeRoundIndexRef.current = nextRoundIndex;
+    setActiveRoundIndex(nextRoundIndex);
+  }, [match?.id, match?.totalRounds, orderedParticipants, clearAgentRevealTimers]);
 
   useEffect(() => {
     if (room?.status === 'FINISHED') {
@@ -1160,30 +1268,43 @@ export default function RoomPage() {
     }
   }, [room?.status, stopRoomRuntime]);
 
-  // Auto-run agent rounds in AGENT_VS_AGENT mode
+  // Auto-run current agent turn when it is agent's seat
   useEffect(() => {
     if (
-      room?.mode !== GAME_MODES.AGENT_VS_AGENT ||
       room?.status !== 'RUNNING' ||
       !isHost ||
       !currentQuestion ||
+      !currentTurnParticipant ||
+      currentTurnParticipant.participantType !== PARTICIPANT_TYPES.AGENT ||
       switchingQuestionRef.current ||
       !!busy ||
       isSubmitting ||
       autoAgentRunningRef.current ||
       runningActionRef.current
-    ) return;
+    ) {
+      return;
+    }
+
     autoAgentRunningRef.current = true;
-    const delay = match?.roundLogs?.length ? 1000 : 300;
+    const delay = match?.roundLogs?.length ? 900 : 300;
     const timer = setTimeout(() => {
       autoAgentRunningRef.current = false;
-      void handleAgentRound();
+      void handleAgentTurn(currentTurnParticipant.id);
     }, delay);
+
     return () => {
       clearTimeout(timer);
       autoAgentRunningRef.current = false;
     };
-  }, [room?.mode, room?.status, isHost, currentQuestion, busy, isSubmitting, match?.roundLogs?.length]);
+  }, [
+    room?.status,
+    isHost,
+    currentQuestion,
+    currentTurnParticipant,
+    busy,
+    isSubmitting,
+    match?.roundLogs?.length
+  ]);
 
   async function runAction(label: string, action: () => Promise<void>): Promise<boolean> {
     if (!pageActiveRef.current || runningActionRef.current) {
@@ -1213,20 +1334,24 @@ export default function RoomPage() {
     }
   }
 
-  async function handleAgentRound() {
+  async function handleAgentTurn(participantId: string, label = 'Agent 回答中...') {
     if (!currentQuestion || !pageActiveRef.current || switchingQuestionRef.current) return;
     const questionKey = currentQuestionKeyRef.current;
     if (!questionKey) return;
+
     const prevLogCount = match?.roundLogs?.length ?? 0;
-    const completed = await runAction('Agent 对战中...', async () => {
+    const roundIndex = activeRoundIndexRef.current;
+
+    const completed = await runAction(label, async () => {
       await api(`/api/matches/${match!.id}/agent-round`, {
         method: 'POST',
         body: JSON.stringify({
+          participantId,
           targetWord: currentQuestion.answer,
           pinyinHint: currentQuestion.initialsText,
           categoryHint: currentQuestion.category,
           questionKey,
-          roundIndex: (match?.totalRounds ?? 0) + 1
+          roundIndex
         })
       });
     });
@@ -1238,55 +1363,35 @@ export default function RoomPage() {
       if (!questionKey || currentQuestionKeyRef.current !== questionKey) {
         return;
       }
+
       const newLogs = freshState.room.match?.roundLogs ?? [];
       const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
-      const anyCorrect = latestLogs.some(l => l.isCorrect);
-      await handleRoundOutcome(anyCorrect, questionKey);
-    }
-  }
+      appendCurrentRoundLogIds(latestLogs);
 
-  // Agent-only round for when human times out
-  async function handleAgentRoundOnly() {
-    if (!currentQuestion || !pageActiveRef.current || switchingQuestionRef.current) return;
-    const questionKey = currentQuestionKeyRef.current;
-    if (!questionKey) return;
-    const prevLogCount = match?.roundLogs?.length ?? 0;
-    const completed = await runAction('超时！Agent 回合中...', async () => {
-      await api(`/api/matches/${match!.id}/agent-round`, {
-        method: 'POST',
-        body: JSON.stringify({
-          targetWord: currentQuestion.answer,
-          pinyinHint: currentQuestion.initialsText,
-          categoryHint: currentQuestion.category,
-          questionKey,
-          roundIndex: (match?.totalRounds ?? 0) + 1
-        })
-      });
-    });
-    if (!completed || !pageActiveRef.current) return;
-
-    const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
-    if (freshState && pageActiveRef.current) {
-      setRoomState(freshState);
-      if (!questionKey || currentQuestionKeyRef.current !== questionKey) {
-        return;
-      }
-      const newLogs = freshState.room.match?.roundLogs ?? [];
-      const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
-      const anyCorrect = latestLogs.some(l => l.isCorrect);
-      await handleRoundOutcome(anyCorrect, questionKey);
+      const participantLog = latestLogs.find((log) =>
+        log.actorId === participantId && log.roundIndex === activeRoundIndexRef.current
+      );
+      const isCorrect = participantLog?.isCorrect ?? false;
+      await finalizeTurnAndMaybeSwitchQuestion(participantId, isCorrect, questionKey);
     }
   }
 
   async function handleHumanMove() {
     if (!pageActiveRef.current || switchingQuestionRef.current || runningActionRef.current) return;
-    if (!guessWord.trim()) { setError('请输入你猜测的中文词语'); return; }
     if (!currentQuestion) { setError('正在加载题目...'); return; }
+    if (!humanParticipant) { setError('当前房间没有玩家身份'); return; }
+    if (currentTurnParticipantId !== humanParticipant.id) {
+      setError('当前还没轮到你作答，请等待其他参与者。');
+      return;
+    }
+    if (!guessWord.trim()) { setError('请输入你猜测的中文词语'); return; }
+
     const questionKey = currentQuestionKeyRef.current;
     if (!questionKey) return;
 
     const prevLogCount = match?.roundLogs?.length ?? 0;
     const submittedWord = guessWord.trim();
+    const roundIndex = activeRoundIndexRef.current;
 
     setGuessWord('');
     setError('');
@@ -1298,13 +1403,14 @@ export default function RoomPage() {
       humanMoveResult = await api<HumanMoveResponse>(`/api/matches/${match!.id}/human-move`, {
         method: 'POST',
         body: JSON.stringify({
-          participantId: humanParticipant?.id,
+          participantId: humanParticipant.id,
           autoAgentResponse: false,
           targetWord: currentQuestion.answer,
           pinyinHint: currentQuestion.initialsText,
           categoryHint: currentQuestion.category,
           questionKey,
-          guessWord: submittedWord
+          guessWord: submittedWord,
+          roundIndex
         })
       });
 
@@ -1325,28 +1431,6 @@ export default function RoomPage() {
     }
 
     if (!pageActiveRef.current) return;
-    await fetchRoom();
-
-    if (humanMoveResult.human.result.isCorrect) {
-      await fetchQuestion();
-      return;
-    }
-
-    if (agentParticipants.length > 0) {
-      const completed = await runAction('Agent 回答中...', async () => {
-        await api(`/api/matches/${match!.id}/agent-round`, {
-          method: 'POST',
-          body: JSON.stringify({
-            targetWord: currentQuestion.answer,
-            pinyinHint: currentQuestion.initialsText,
-            categoryHint: currentQuestion.category,
-            questionKey,
-            roundIndex: humanMoveResult.roundIndex
-          })
-        });
-      });
-      if (!completed || !pageActiveRef.current) return;
-    }
 
     const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
     if (freshState && pageActiveRef.current) {
@@ -1354,12 +1438,15 @@ export default function RoomPage() {
       if (!questionKey || currentQuestionKeyRef.current !== questionKey) {
         return;
       }
+
       const newLogs = freshState.room.match?.roundLogs ?? [];
       const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
-      const anyCorrect = latestLogs.some((log) => log.isCorrect);
-      if (latestLogs.length > 0) {
-        await handleRoundOutcome(anyCorrect, questionKey);
-      }
+      appendCurrentRoundLogIds(latestLogs);
+      await finalizeTurnAndMaybeSwitchQuestion(
+        humanParticipant.id,
+        humanMoveResult.human.result.isCorrect,
+        questionKey
+      );
     }
   }
 
@@ -1390,7 +1477,6 @@ export default function RoomPage() {
     );
   }
 
-  const showHint = failedRounds >= 2 && currentQuestion;
   const timerUrgent = timeLeft !== null && timeLeft <= 30;
   const revealedAgentLogSet = new Set(revealedAgentLogIds);
 
@@ -1398,6 +1484,12 @@ export default function RoomPage() {
   const latestAnswers = new Map<string, { guessWord: string; isCorrect: boolean; roundIndex: number }>();
   if (match?.roundLogs) {
     for (const log of match.roundLogs) {
+      if (log.roundIndex !== activeRoundIndexRef.current) {
+        continue;
+      }
+      if (!currentRoundLogIdsRef.current.has(log.id)) {
+        continue;
+      }
       const player = participants.find(p => p.id === log.actorId);
       const isAgent = player?.participantType === PARTICIPANT_TYPES.AGENT;
       if (isAgent && !revealedAgentLogSet.has(log.id)) continue;
@@ -1420,7 +1512,7 @@ export default function RoomPage() {
               {room?.mode === GAME_MODES.AGENT_VS_AGENT ? 'Agent对战' : '玩家VS Agent'}
             </span>
             <span className="chatroom__round-tag">
-              第 {match?.totalRounds || 0} 回合
+              第 {room?.status === 'RUNNING' ? activeRoundIndex : (match?.totalRounds || 0)} 回合
             </span>
           </div>
           <div className="chatroom__header-right">
@@ -1473,20 +1565,12 @@ export default function RoomPage() {
                 <span key={i} className="chatroom__hint-letter">{letter}</span>
               ))}
             </div>
-            {showHint ? (
-              <div className="chatroom__hint-category chatroom__hint-category--reveal">
-                提示：{currentQuestion.category}
-              </div>
-            ) : (
-              <div className="chatroom__hint-category">
-                {failedRounds > 0 ? `已猜 ${failedRounds} 轮未中，再猜一轮将给出提示` : '请猜词'}
-              </div>
-            )}
-            {answerRevealText && (
-              <div className="chatroom__hint-category chatroom__hint-category--reveal">
-                {answerRevealText}
-              </div>
-            )}
+            <div className="chatroom__hint-category chatroom__hint-category--reveal">
+              提示：{currentQuestion.category}
+            </div>
+            <div className="chatroom__hint-category">
+              当前轮到：{currentTurnParticipant?.displayName ?? '等待中'}
+            </div>
           </div>
         )}
 
@@ -1544,8 +1628,12 @@ export default function RoomPage() {
                 <button
                   type="button"
                   className="btn btn--primary btn--full"
-                  onClick={() => void handleAgentRound()}
-                  disabled={!!busy || isSubmitting}
+                  onClick={() => {
+                    if (currentTurnParticipant?.participantType === PARTICIPANT_TYPES.AGENT) {
+                      void handleAgentTurn(currentTurnParticipant.id);
+                    }
+                  }}
+                  disabled={!!busy || isSubmitting || currentTurnParticipant?.participantType !== PARTICIPANT_TYPES.AGENT}
                 >
                   运行 Agent 回合
                 </button>
@@ -1568,14 +1656,15 @@ export default function RoomPage() {
                     className="chatroom__guess-input"
                     value={guessWord}
                     onChange={e => setGuessWord(e.target.value)}
-                    placeholder="输入你猜的中文词语..."
-                    onKeyDown={e => { if (e.key === 'Enter') void handleHumanMove(); }}
+                    placeholder={isHumanTurn ? '输入你猜的中文词语...' : '当前未轮到你作答'}
+                    onKeyDown={e => { if (e.key === 'Enter' && isHumanTurn) void handleHumanMove(); }}
+                    disabled={!isHumanTurn || !!busy || isSubmitting}
                   />
                   <button
                     type="button"
                     className="btn btn--primary chatroom__send-btn"
                     onClick={() => void handleHumanMove()}
-                    disabled={!!busy || isSubmitting}
+                    disabled={!isHumanTurn || !!busy || isSubmitting}
                   >
                     发送
                   </button>
