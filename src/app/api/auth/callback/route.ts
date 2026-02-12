@@ -7,6 +7,7 @@ import { prisma } from '@/lib/db';
 import { env } from '@/lib/config/env';
 import { secondMeSdk } from '@/lib/secondme/sdk';
 import { recordMetricEvent } from '@/lib/metrics/service';
+import { triggerUserPrewarm } from '@/lib/agent/question-cache';
 
 function normalizeAvatarFromProfile(profile: {
   avatarUrl?: string;
@@ -82,6 +83,8 @@ export async function GET(request: Request): Promise<Response> {
       userId: user.id,
       payload: { secondmeUserId }
     });
+
+    triggerUserPrewarm(user.id, 'oauth_callback_login');
 
     const returnTo = await consumeOauthReturnTo('/');
     const response = NextResponse.redirect(new URL(returnTo, env.appBaseUrl));

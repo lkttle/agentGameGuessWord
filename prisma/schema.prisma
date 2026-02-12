@@ -39,25 +39,31 @@ enum MetricEventType {
   MATCH_COMPLETE
 }
 
+enum AgentQuestionCacheStatus {
+  READY
+  FAILED
+}
+
 model User {
-  id             String      @id @default(cuid())
-  secondmeUserId String?     @unique @map("secondme_user_id")
-  email          String?     @map("email")
-  name           String?     @map("name")
-  avatarUrl      String?     @map("avatar_url")
-  route          String?     @map("route")
-  selfIntroduction String?   @map("self_introduction")
-  accessToken    String?     @map("access_token")
-  refreshToken   String?     @map("refresh_token")
-  tokenExpiresAt DateTime?   @map("token_expires_at")
-  createdAt      DateTime    @default(now()) @map("created_at")
-  updatedAt      DateTime    @updatedAt @map("updated_at")
-  hostedRooms    Room[]      @relation("RoomHost")
-  participants   Participant[]
-  scores         LeaderboardEntry[]
-  metricEvents   MetricEvent[]
-  wonMatches     Match[]           @relation("MatchWinner")
-  chatSessions   ChatSession[]
+  id               String               @id @default(cuid())
+  secondmeUserId   String?              @unique @map("secondme_user_id")
+  email            String?              @map("email")
+  name             String?              @map("name")
+  avatarUrl        String?              @map("avatar_url")
+  route            String?              @map("route")
+  selfIntroduction String?              @map("self_introduction")
+  accessToken      String?              @map("access_token")
+  refreshToken     String?              @map("refresh_token")
+  tokenExpiresAt   DateTime?            @map("token_expires_at")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+  hostedRooms      Room[]               @relation("RoomHost")
+  participants     Participant[]
+  scores           LeaderboardEntry[]
+  metricEvents     MetricEvent[]
+  wonMatches       Match[]              @relation("MatchWinner")
+  chatSessions     ChatSession[]
+  questionCaches   AgentQuestionCache[]
 
   @@index([createdAt])
   @@map("users")
@@ -112,16 +118,16 @@ model Participant {
 }
 
 model Match {
-  id            String       @id @default(cuid())
-  roomId         String       @unique @map("room_id")
-  room           Room         @relation(fields: [roomId], references: [id])
-  status         MatchStatus  @default(RUNNING)
-  winnerUserId   String?      @map("winner_user_id")
-  winnerUser     User?        @relation("MatchWinner", fields: [winnerUserId], references: [id])
-  totalRounds    Int          @default(0) @map("total_rounds")
-  startedAt      DateTime     @default(now()) @map("started_at")
-  endedAt        DateTime?    @map("ended_at")
-  roundLogs      RoundLog[]
+  id            String      @id @default(cuid())
+  roomId        String      @unique @map("room_id")
+  room          Room        @relation(fields: [roomId], references: [id])
+  status        MatchStatus @default(RUNNING)
+  winnerUserId  String?     @map("winner_user_id")
+  winnerUser    User?       @relation("MatchWinner", fields: [winnerUserId], references: [id])
+  totalRounds   Int         @default(0) @map("total_rounds")
+  startedAt     DateTime    @default(now()) @map("started_at")
+  endedAt       DateTime?   @map("ended_at")
+  roundLogs     RoundLog[]
 
   @@index([status])
   @@index([winnerUserId])
@@ -129,18 +135,18 @@ model Match {
 }
 
 model RoundLog {
-  id               String          @id @default(cuid())
-  matchId           String          @map("match_id")
-  match             Match           @relation(fields: [matchId], references: [id])
-  roundIndex        Int             @map("round_index")
-  actorType         ParticipantType @map("actor_type")
-  actorId           String          @map("actor_id")
-  guessWord         String?         @map("guess_word")
-  isCorrect         Boolean         @default(false) @map("is_correct")
-  scoreDelta        Int             @default(0) @map("score_delta")
-  timedOut          Boolean         @default(false) @map("timed_out")
-  elapsedMs         Int?            @map("elapsed_ms")
-  createdAt         DateTime        @default(now()) @map("created_at")
+  id         String          @id @default(cuid())
+  matchId    String          @map("match_id")
+  match      Match           @relation(fields: [matchId], references: [id])
+  roundIndex Int             @map("round_index")
+  actorType  ParticipantType @map("actor_type")
+  actorId    String          @map("actor_id")
+  guessWord  String?         @map("guess_word")
+  isCorrect  Boolean         @default(false) @map("is_correct")
+  scoreDelta Int             @default(0) @map("score_delta")
+  timedOut   Boolean         @default(false) @map("timed_out")
+  elapsedMs  Int?            @map("elapsed_ms")
+  createdAt  DateTime        @default(now()) @map("created_at")
 
   @@index([matchId, roundIndex])
   @@index([actorId])
@@ -148,16 +154,16 @@ model RoundLog {
 }
 
 model LeaderboardEntry {
-  id         String            @id @default(cuid())
-  userId     String            @map("user_id")
-  user       User              @relation(fields: [userId], references: [id])
-  period     LeaderboardPeriod
-  dateKey    String?           @map("date_key")
-  score      Int               @default(0)
-  wins       Int               @default(0)
-  losses     Int               @default(0)
-  updatedAt  DateTime          @updatedAt @map("updated_at")
-  createdAt  DateTime          @default(now()) @map("created_at")
+  id        String            @id @default(cuid())
+  userId    String            @map("user_id")
+  user      User              @relation(fields: [userId], references: [id])
+  period    LeaderboardPeriod
+  dateKey   String?           @map("date_key")
+  score     Int               @default(0)
+  wins      Int               @default(0)
+  losses    Int               @default(0)
+  updatedAt DateTime          @updatedAt @map("updated_at")
+  createdAt DateTime          @default(now()) @map("created_at")
 
   @@unique([userId, period, dateKey])
   @@index([period, score])
@@ -179,4 +185,29 @@ model MetricEvent {
   @@index([roomId])
   @@index([matchId])
   @@map("metric_events")
+}
+
+model AgentQuestionCache {
+  id              String                   @id @default(cuid())
+  userId          String                   @map("user_id")
+  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionKey     String                   @map("question_key")
+  initialsText    String                   @map("initials_text")
+  answer          String                   @map("answer")
+  category        String                   @map("category")
+  answerText      String                   @map("answer_text")
+  normalizedGuess String?                  @map("normalized_guess")
+  audioDataUrl    String?                  @map("audio_data_url")
+  sourceAudioUrl  String?                  @map("source_audio_url")
+  ttsDurationMs   Int?                     @map("tts_duration_ms")
+  ttsFormat       String?                  @map("tts_format")
+  status          AgentQuestionCacheStatus @default(READY)
+  lastError       String?                  @map("last_error")
+  generatedAt     DateTime                 @default(now()) @map("generated_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+
+  @@unique([userId, questionKey])
+  @@index([questionKey])
+  @@index([status, updatedAt])
+  @@map("agent_question_caches")
 }

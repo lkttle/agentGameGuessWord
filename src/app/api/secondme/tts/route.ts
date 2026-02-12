@@ -1,3 +1,4 @@
+import { AgentQuestionCacheStatus } from '@prisma/client';
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
@@ -119,7 +120,6 @@ export async function POST(request: Request): Promise<Response> {
     textPreview: text.slice(0, 40)
   });
 
-  // Prefer participant owner token (agent voice), then explicit userId, then current user
   let targetUserId = body.userId || currentUser.id;
 
   if (body.participantId) {
@@ -139,6 +139,98 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
+  const cachedAudio = await prisma.agentQuestionCache.findFirst({
+    where: {
+      userId: targetUserId,
+      answerText: text,
+      status: AgentQuestionCacheStatus.READY
+    },
+    orderBy: { generatedAt: 'desc' },
+    select: {
+      id: true,
+      audioDataUrl: true,
+      sourceAudioUrl: true,
+      ttsDurationMs: true,
+      ttsFormat: true
+    }
+  });
+
+  if (cachedAudio?.audioDataUrl) {
+    ttsServerLog(requestId, 'cache_audio_hit_data_url', {
+      targetUserId,
+      cacheId: cachedAudio.id
+    });
+
+    const response = NextResponse.json({
+      code: 0,
+      data: {
+        url: cachedAudio.audioDataUrl,
+        sourceUrl: cachedAudio.sourceAudioUrl,
+        proxied: true,
+        durationMs: cachedAudio.ttsDurationMs ?? 0,
+        format: cachedAudio.ttsFormat ?? 'mp3',
+        cached: true
+      },
+      requestId
+    });
+    response.headers.set('x-tts-request-id', requestId);
+    return response;
+  }
+
+  if (cachedAudio?.sourceAudioUrl) {
+    ttsServerLog(requestId, 'cache_audio_hit_source_url', {
+      targetUserId,
+      cacheId: cachedAudio.id
+    });
+
+    let cachedUrlToPlay = cachedAudio.sourceAudioUrl;
+    let proxied = false;
+    let mimeType: string | null = null;
+    let byteLength: number | null = null;
+
+    if (ttsProxyAudioEnabled()) {
+      try {
+        const proxiedAudio = await fetchAudioAsDataUrl(requestId, cachedAudio.sourceAudioUrl, cachedAudio.ttsFormat ?? undefined);
+        if (proxiedAudio) {
+          cachedUrlToPlay = proxiedAudio.dataUrl;
+          proxied = true;
+          mimeType = proxiedAudio.mimeType;
+          byteLength = proxiedAudio.byteLength;
+
+          await prisma.agentQuestionCache.update({
+            where: { id: cachedAudio.id },
+            data: {
+              audioDataUrl: proxiedAudio.dataUrl
+            }
+          });
+        }
+      } catch (error) {
+        ttsServerLog(requestId, 'cache_audio_proxy_failed', {
+          targetUserId,
+          cacheId: cachedAudio.id,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    const response = NextResponse.json({
+      code: 0,
+      data: {
+        url: cachedUrlToPlay,
+        sourceUrl: cachedAudio.sourceAudioUrl,
+        proxied,
+        mimeType,
+        byteLength,
+        durationMs: cachedAudio.ttsDurationMs ?? 0,
+        format: cachedAudio.ttsFormat ?? 'mp3',
+        cached: true
+      },
+      requestId
+    });
+    response.headers.set('x-tts-request-id', requestId);
+    return response;
+  }
+
   const user = await prisma.user.findUnique({
     where: { id: targetUserId },
     select: { accessToken: true, refreshToken: true, tokenExpiresAt: true }
@@ -154,7 +246,6 @@ export async function POST(request: Request): Promise<Response> {
 
   let accessToken = user.accessToken;
 
-  // Refresh token if expired
   if (user.tokenExpiresAt && user.tokenExpiresAt < new Date() && user.refreshToken) {
     ttsServerLog(requestId, 'refresh_token_start', {
       targetUserId,
@@ -177,7 +268,6 @@ export async function POST(request: Request): Promise<Response> {
         expiresIn: newToken.expiresIn
       });
     } catch {
-      // Use existing token as fallback
       ttsServerLog(requestId, 'refresh_token_failed_use_old', { targetUserId });
     }
   }

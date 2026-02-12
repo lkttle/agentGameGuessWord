@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { GAME_MODES, type GameMode } from '@/lib/domain/types';
 import { HomeRecentUsersTicker } from '@/components/HomeHeroWidgets';
@@ -69,6 +69,31 @@ function HomeContent() {
   const [busy, setBusy] = useState('');
 
   const modeConfig = modeOptions.find(o => o.key === selectedMode) ?? modeOptions[0];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function triggerPrewarmOnHomeEntry(): Promise<void> {
+      const session = await apiJson<SessionResponse>('/api/auth/session').catch(() => null);
+      if (!session?.authenticated || cancelled) {
+        return;
+      }
+
+      await fetch('/api/agents/prewarm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'all' }),
+        cache: 'no-store',
+        keepalive: true
+      }).catch(() => undefined);
+    }
+
+    void triggerPrewarmOnHomeEntry();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function ensureSession(): Promise<SessionResponse | null> {
     const session = await apiJson<SessionResponse>('/api/auth/session').catch(

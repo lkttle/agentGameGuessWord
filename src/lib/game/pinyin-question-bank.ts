@@ -123,6 +123,9 @@ const QUESTION_BANK: PinyinQuestionCandidate[] = [
   { initials: ['B', 'J', 'D', 'X'], answer: '北京大学', category: '学校' }
 ];
 
+const RECENT_QUESTION_WINDOW = 20;
+const recentQuestionKeys: string[] = [];
+
 function clampCount(count: number | undefined): number {
   if (!Number.isFinite(count)) {
     return 1;
@@ -144,8 +147,66 @@ function shuffle<T>(items: T[]): T[] {
   return cloned;
 }
 
+function pushRecentQuestionKeys(keys: string[]): void {
+  if (keys.length === 0) return;
+  recentQuestionKeys.push(...keys);
+  if (recentQuestionKeys.length > RECENT_QUESTION_WINDOW) {
+    recentQuestionKeys.splice(0, recentQuestionKeys.length - RECENT_QUESTION_WINDOW);
+  }
+}
+
+export function buildPinyinQuestionKey(question: Pick<PinyinQuestion, 'initialsText' | 'answer' | 'category'>): string {
+  return `${question.initialsText.trim().toUpperCase()}|${question.answer.trim()}|${question.category.trim()}`;
+}
+
+export function parsePinyinQuestionKey(questionKey?: string | null): PinyinQuestion | null {
+  const normalized = questionKey?.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const [initialsTextRaw, answerRaw, categoryRaw = ''] = normalized.split('|');
+  const initialsText = initialsTextRaw?.trim().toUpperCase();
+  const answer = answerRaw?.trim();
+  const category = categoryRaw.trim();
+
+  if (!initialsText || !answer) {
+    return null;
+  }
+
+  const initials = initialsText.split('');
+  const candidate: PinyinQuestionCandidate = {
+    initials,
+    answer,
+    category: category || '未知分类'
+  };
+
+  if (validateQuestionCandidate(candidate) !== null) {
+    return null;
+  }
+
+  return toValidatedQuestion(candidate);
+}
+
 export function getPinyinQuestionCandidates(): PinyinQuestionCandidate[] {
   return QUESTION_BANK;
+}
+
+export function getAllPinyinQuestions(): PinyinQuestion[] {
+  return QUESTION_BANK
+    .filter((candidate) => validateQuestionCandidate(candidate) === null)
+    .map((candidate) => toValidatedQuestion(candidate));
+}
+
+export function findPinyinQuestionByAnswer(answer: string): PinyinQuestion | null {
+  const normalizedAnswer = answer.trim();
+  if (!normalizedAnswer) return null;
+
+  const candidate = QUESTION_BANK.find((item) => item.answer.trim() === normalizedAnswer);
+  if (!candidate || validateQuestionCandidate(candidate) !== null) {
+    return null;
+  }
+  return toValidatedQuestion(candidate);
 }
 
 export function generatePinyinQuestions(options: GeneratePinyinQuestionOptions = {}): PinyinQuestion[] {
@@ -167,7 +228,15 @@ export function generatePinyinQuestions(options: GeneratePinyinQuestionOptions =
     return [];
   }
 
-  return shuffle(filteredCandidates)
-    .slice(0, Math.min(count, filteredCandidates.length))
-    .map((candidate) => toValidatedQuestion(candidate));
+  const shuffledCandidates = shuffle(filteredCandidates);
+  const shuffledQuestions = shuffledCandidates.map((candidate) => toValidatedQuestion(candidate));
+  const recentSet = new Set(recentQuestionKeys);
+
+  const nonRecentQuestions = shuffledQuestions.filter((question) => !recentSet.has(buildPinyinQuestionKey(question)));
+  const sourceQuestions = nonRecentQuestions.length >= count ? nonRecentQuestions : shuffledQuestions;
+
+  const selectedQuestions = sourceQuestions.slice(0, Math.min(count, sourceQuestions.length));
+  pushRecentQuestionKeys(selectedQuestions.map((question) => buildPinyinQuestionKey(question)));
+
+  return selectedQuestions;
 }

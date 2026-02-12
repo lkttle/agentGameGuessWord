@@ -1,6 +1,10 @@
 import { prisma } from '@/lib/db';
 import { secondMeSdk } from '@/lib/secondme/sdk';
 import type { AgentTurnClient, AgentTurnContext } from './orchestrator';
+import {
+  getOrCreateCachedAgentResponseByParticipant,
+  resolveQuestionFromContext
+} from './question-cache';
 
 /**
  * Agent client that uses SecondMe Chat API for generating guesses.
@@ -9,7 +13,6 @@ import type { AgentTurnClient, AgentTurnContext } from './orchestrator';
 export class SecondMeAgentTurnClient implements AgentTurnClient {
 
   private async getAccessToken(participantId: string): Promise<string | null> {
-    // Look up the participant → owner user → get access token
     const participant = await prisma.participant.findUnique({
       where: { id: participantId },
       include: {
@@ -30,7 +33,6 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
 
     const user = participant.user;
 
-    // Check if token is expired and refresh if needed
     if (user.tokenExpiresAt && user.tokenExpiresAt < new Date() && user.refreshToken) {
       try {
         const newToken = await secondMeSdk.refreshAccessToken(user.refreshToken);
@@ -44,7 +46,6 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
         });
         return newToken.accessToken;
       } catch {
-        // If refresh fails, try with existing token
         return user.accessToken;
       }
     }
@@ -53,12 +54,32 @@ export class SecondMeAgentTurnClient implements AgentTurnClient {
   }
 
   async generateGuess(agentId: string, context: AgentTurnContext): Promise<string> {
+    const question = resolveQuestionFromContext({
+      questionKey: context.questionKey,
+      pinyinHint: context.pinyinHint,
+      categoryHint: context.categoryHint
+    });
+
+    if (question) {
+      try {
+        const cached = await getOrCreateCachedAgentResponseByParticipant({
+          participantId: agentId,
+          question
+        });
+
+        if (cached?.answerText?.trim()) {
+          return cached.answerText.trim();
+        }
+      } catch {
+        // fallback to live request below
+      }
+    }
+
     const accessToken = await this.getAccessToken(agentId);
     if (!accessToken) {
       throw new Error(`No access token for agent participant ${agentId}`);
     }
 
-    // Build the pinyin initials from pinyinHint (preferred) or hint (fallback)
     const pinyinInitials = context.pinyinHint
       ? context.pinyinHint.toUpperCase()
       : context.hint.replace(/_/g, '').toUpperCase();
