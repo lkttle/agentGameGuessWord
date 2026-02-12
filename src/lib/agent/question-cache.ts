@@ -29,7 +29,7 @@ interface CachedAgentResponse {
   ttsFormat: string | null;
 }
 
-interface PrewarmStats {
+export interface PrewarmStats {
   scannedPairs: number;
   generated: number;
   hits: number;
@@ -44,6 +44,22 @@ interface PrewarmOptions {
   reason?: string;
   concurrency?: number;
   maxRetries?: number;
+}
+
+interface LastPrewarmRecord {
+  reason: string;
+  stats: PrewarmStats;
+  finishedAt: string;
+  scope: 'global' | 'user';
+  userId?: string;
+}
+
+export interface PrewarmRuntimeSnapshot {
+  isGlobalRunning: boolean;
+  runningUserCount: number;
+  inFlightPairCount: number;
+  lastGlobalPrewarm: LastPrewarmRecord | null;
+  lastUserPrewarm: LastPrewarmRecord[];
 }
 
 function cacheDebugEnabled(): boolean {
@@ -152,12 +168,16 @@ function getGlobalLocks(): {
   inFlightPairs: Set<string>;
   runningGlobalPrewarm: Promise<PrewarmStats> | null;
   userPrewarmMap: Map<string, Promise<PrewarmStats>>;
+  lastGlobalPrewarm: LastPrewarmRecord | null;
+  lastUserPrewarmByUserId: Map<string, LastPrewarmRecord>;
 } {
   const globalRef = globalThis as typeof globalThis & {
     __agentCacheLocks?: {
       inFlightPairs: Set<string>;
       runningGlobalPrewarm: Promise<PrewarmStats> | null;
       userPrewarmMap: Map<string, Promise<PrewarmStats>>;
+      lastGlobalPrewarm: LastPrewarmRecord | null;
+      lastUserPrewarmByUserId: Map<string, LastPrewarmRecord>;
     };
   };
 
@@ -165,11 +185,48 @@ function getGlobalLocks(): {
     globalRef.__agentCacheLocks = {
       inFlightPairs: new Set<string>(),
       runningGlobalPrewarm: null,
-      userPrewarmMap: new Map<string, Promise<PrewarmStats>>()
+      userPrewarmMap: new Map<string, Promise<PrewarmStats>>(),
+      lastGlobalPrewarm: null,
+      lastUserPrewarmByUserId: new Map<string, LastPrewarmRecord>()
     };
   }
 
   return globalRef.__agentCacheLocks;
+}
+
+function recordGlobalPrewarmResult(reason: string, stats: PrewarmStats): void {
+  const locks = getGlobalLocks();
+  locks.lastGlobalPrewarm = {
+    reason,
+    stats,
+    finishedAt: new Date().toISOString(),
+    scope: 'global'
+  };
+}
+
+function recordUserPrewarmResult(userId: string, reason: string, stats: PrewarmStats): void {
+  const locks = getGlobalLocks();
+  locks.lastUserPrewarmByUserId.set(userId, {
+    reason,
+    stats,
+    finishedAt: new Date().toISOString(),
+    scope: 'user',
+    userId
+  });
+}
+
+export function getPrewarmRuntimeSnapshot(): PrewarmRuntimeSnapshot {
+  const locks = getGlobalLocks();
+
+  return {
+    isGlobalRunning: Boolean(locks.runningGlobalPrewarm),
+    runningUserCount: locks.userPrewarmMap.size,
+    inFlightPairCount: locks.inFlightPairs.size,
+    lastGlobalPrewarm: locks.lastGlobalPrewarm,
+    lastUserPrewarm: Array.from(locks.lastUserPrewarmByUserId.values())
+      .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt))
+      .slice(0, 20)
+  };
 }
 
 function buildPairKey(userId: string, question: CacheQuestion): string {
@@ -656,6 +713,71 @@ export async function prewarmQuestionCache(input?: PrewarmOptions): Promise<Prew
   return stats;
 }
 
+export async function getAgentCacheProgressStats(): Promise<{
+  eligibleAgentCount: number;
+  questionCount: number;
+  totalExpectedPairs: number;
+  readyPairCount: number;
+  failedPairCount: number;
+  pendingPairCount: number;
+  coverageRate: number;
+  throughputPerSecond: number | null;
+  estimatedSecondsRemaining: number | null;
+  runtime: PrewarmRuntimeSnapshot;
+}> {
+  const runtime = getPrewarmRuntimeSnapshot();
+  const questionCount = getAllPinyinQuestions().length;
+
+  const eligibleFilter = {
+    secondmeUserId: { not: null as string | null },
+    accessToken: { not: null as string | null }
+  };
+
+  const [eligibleAgentCount, readyPairCount, failedPairCount] = await Promise.all([
+    prisma.user.count({ where: eligibleFilter }),
+    prisma.agentQuestionCache.count({
+      where: {
+        status: AgentQuestionCacheStatus.READY,
+        user: eligibleFilter
+      }
+    }),
+    prisma.agentQuestionCache.count({
+      where: {
+        status: AgentQuestionCacheStatus.FAILED,
+        user: eligibleFilter
+      }
+    })
+  ]);
+
+  const totalExpectedPairs = eligibleAgentCount * questionCount;
+  const pendingPairCount = Math.max(totalExpectedPairs - readyPairCount, 0);
+  const coverageRate = totalExpectedPairs > 0 ? readyPairCount / totalExpectedPairs : 1;
+
+  const lastStats = runtime.lastGlobalPrewarm?.stats;
+  const throughputPerSecond =
+    lastStats && lastStats.elapsedMs > 0
+      ? Number((lastStats.generated / (lastStats.elapsedMs / 1000)).toFixed(3))
+      : null;
+
+  const estimatedSecondsRemaining =
+    throughputPerSecond && throughputPerSecond > 0
+      ? Math.ceil(pendingPairCount / throughputPerSecond)
+      : null;
+
+  return {
+    eligibleAgentCount,
+    questionCount,
+    totalExpectedPairs,
+    readyPairCount,
+    failedPairCount,
+    pendingPairCount,
+    coverageRate,
+    throughputPerSecond,
+    estimatedSecondsRemaining,
+    runtime
+  };
+}
+
 export function triggerGlobalPrewarm(reason: string): boolean {
   const locks = getGlobalLocks();
   if (locks.runningGlobalPrewarm) {
@@ -663,18 +785,24 @@ export function triggerGlobalPrewarm(reason: string): boolean {
   }
 
   locks.runningGlobalPrewarm = prewarmQuestionCache({ reason })
+    .then((stats) => {
+      recordGlobalPrewarmResult(reason, stats);
+      return stats;
+    })
     .catch((error) => {
       cacheLog('global_prewarm_failed', {
         reason,
         error: error instanceof Error ? error.message : String(error)
       });
-      return {
+      const fallback = {
         scannedPairs: 0,
         generated: 0,
         hits: 0,
         failed: 1,
         elapsedMs: 0
       } satisfies PrewarmStats;
+      recordGlobalPrewarmResult(reason, fallback);
+      return fallback;
     })
     .finally(() => {
       locks.runningGlobalPrewarm = null;
@@ -692,9 +820,30 @@ export function triggerUserPrewarm(userId: string, reason: string): boolean {
   const task = prewarmQuestionCache({
     targetUserId: userId,
     reason
-  }).finally(() => {
-    locks.userPrewarmMap.delete(userId);
-  });
+  })
+    .then((stats) => {
+      recordUserPrewarmResult(userId, reason, stats);
+      return stats;
+    })
+    .catch((error) => {
+      cacheLog('user_prewarm_failed', {
+        userId,
+        reason,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      const fallback = {
+        scannedPairs: 0,
+        generated: 0,
+        hits: 0,
+        failed: 1,
+        elapsedMs: 0
+      } satisfies PrewarmStats;
+      recordUserPrewarmResult(userId, reason, fallback);
+      return fallback;
+    })
+    .finally(() => {
+      locks.userPrewarmMap.delete(userId);
+    });
 
   locks.userPrewarmMap.set(userId, task);
   return true;
