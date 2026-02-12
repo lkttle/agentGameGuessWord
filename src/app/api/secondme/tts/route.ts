@@ -95,6 +95,15 @@ function ttsServerLog(requestId: string, event: string, payload?: Record<string,
   console.info(`[tts][api][${requestId}] ${event}`);
 }
 
+function isCacheTableMissingError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2021'
+  );
+}
+
 export async function POST(request: Request): Promise<Response> {
   const requestId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`).slice(0, 8);
   const startAt = Date.now();
@@ -139,21 +148,40 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
-  const cachedAudio = await prisma.agentQuestionCache.findFirst({
-    where: {
-      userId: targetUserId,
-      answerText: text,
-      status: AgentQuestionCacheStatus.READY
-    },
-    orderBy: { generatedAt: 'desc' },
-    select: {
-      id: true,
-      audioDataUrl: true,
-      sourceAudioUrl: true,
-      ttsDurationMs: true,
-      ttsFormat: true
+  let cachedAudio: {
+    id: string;
+    audioDataUrl: string | null;
+    sourceAudioUrl: string | null;
+    ttsDurationMs: number | null;
+    ttsFormat: string | null;
+  } | null = null;
+
+  try {
+    cachedAudio = await prisma.agentQuestionCache.findFirst({
+      where: {
+        userId: targetUserId,
+        answerText: text,
+        status: AgentQuestionCacheStatus.READY
+      },
+      orderBy: { generatedAt: 'desc' },
+      select: {
+        id: true,
+        audioDataUrl: true,
+        sourceAudioUrl: true,
+        ttsDurationMs: true,
+        ttsFormat: true
+      }
+    });
+  } catch (error) {
+    if (!isCacheTableMissingError(error)) {
+      throw error;
     }
-  });
+
+    ttsServerLog(requestId, 'cache_table_missing_skip_cache_lookup', {
+      targetUserId
+    });
+    cachedAudio = null;
+  }
 
   if (cachedAudio?.audioDataUrl) {
     ttsServerLog(requestId, 'cache_audio_hit_data_url', {
@@ -197,12 +225,22 @@ export async function POST(request: Request): Promise<Response> {
           mimeType = proxiedAudio.mimeType;
           byteLength = proxiedAudio.byteLength;
 
-          await prisma.agentQuestionCache.update({
-            where: { id: cachedAudio.id },
-            data: {
-              audioDataUrl: proxiedAudio.dataUrl
+          try {
+            await prisma.agentQuestionCache.update({
+              where: { id: cachedAudio.id },
+              data: {
+                audioDataUrl: proxiedAudio.dataUrl
+              }
+            });
+          } catch (updateError) {
+            if (!isCacheTableMissingError(updateError)) {
+              throw updateError;
             }
-          });
+            ttsServerLog(requestId, 'cache_table_missing_skip_cache_update', {
+              targetUserId,
+              cacheId: cachedAudio.id
+            });
+          }
         }
       } catch (error) {
         ttsServerLog(requestId, 'cache_audio_proxy_failed', {

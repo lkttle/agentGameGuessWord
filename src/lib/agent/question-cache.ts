@@ -75,6 +75,15 @@ function cacheLog(event: string, payload?: Record<string, unknown>): void {
   console.info(`[agent-cache] ${event}`);
 }
 
+function isCacheTableMissingError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2021'
+  );
+}
+
 function ttsProxyAudioEnabled(): boolean {
   return process.env.SECONDME_TTS_PROXY_AUDIO !== '0';
 }
@@ -269,62 +278,78 @@ async function getAccessTokenForUser(userId: string): Promise<string | null> {
 }
 
 async function readReadyCache(userId: string, question: CacheQuestion): Promise<CachedAgentResponse | null> {
-  const cache = await prisma.agentQuestionCache.findUnique({
-    where: {
-      userId_questionKey: {
-        userId,
-        questionKey: buildPinyinQuestionKey(question)
+  try {
+    const cache = await prisma.agentQuestionCache.findUnique({
+      where: {
+        userId_questionKey: {
+          userId,
+          questionKey: buildPinyinQuestionKey(question)
+        }
+      },
+      select: {
+        status: true,
+        answerText: true,
+        normalizedGuess: true,
+        audioDataUrl: true,
+        sourceAudioUrl: true,
+        ttsDurationMs: true,
+        ttsFormat: true
       }
-    },
-    select: {
-      status: true,
-      answerText: true,
-      normalizedGuess: true,
-      audioDataUrl: true,
-      sourceAudioUrl: true,
-      ttsDurationMs: true,
-      ttsFormat: true
+    });
+
+    if (!cache || cache.status !== AgentQuestionCacheStatus.READY || !cache.answerText.trim()) {
+      return null;
     }
-  });
 
-  if (!cache || cache.status !== AgentQuestionCacheStatus.READY || !cache.answerText.trim()) {
-    return null;
+    return {
+      answerText: cache.answerText,
+      normalizedGuess: cache.normalizedGuess,
+      audioDataUrl: cache.audioDataUrl,
+      sourceAudioUrl: cache.sourceAudioUrl,
+      ttsDurationMs: cache.ttsDurationMs,
+      ttsFormat: cache.ttsFormat
+    };
+  } catch (error) {
+    if (isCacheTableMissingError(error)) {
+      cacheLog('cache_table_missing_read_fallback', { userId });
+      return null;
+    }
+    throw error;
   }
-
-  return {
-    answerText: cache.answerText,
-    normalizedGuess: cache.normalizedGuess,
-    audioDataUrl: cache.audioDataUrl,
-    sourceAudioUrl: cache.sourceAudioUrl,
-    ttsDurationMs: cache.ttsDurationMs,
-    ttsFormat: cache.ttsFormat
-  };
 }
 
 async function writeFailedCache(userId: string, question: CacheQuestion, error: unknown): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
-  await prisma.agentQuestionCache.upsert({
-    where: {
-      userId_questionKey: {
+  try {
+    await prisma.agentQuestionCache.upsert({
+      where: {
+        userId_questionKey: {
+          userId,
+          questionKey: buildPinyinQuestionKey(question)
+        }
+      },
+      create: {
         userId,
-        questionKey: buildPinyinQuestionKey(question)
+        questionKey: buildPinyinQuestionKey(question),
+        initialsText: question.initialsText,
+        answer: question.answer,
+        category: question.category,
+        answerText: '',
+        status: AgentQuestionCacheStatus.FAILED,
+        lastError: message
+      },
+      update: {
+        status: AgentQuestionCacheStatus.FAILED,
+        lastError: message
       }
-    },
-    create: {
-      userId,
-      questionKey: buildPinyinQuestionKey(question),
-      initialsText: question.initialsText,
-      answer: question.answer,
-      category: question.category,
-      answerText: '',
-      status: AgentQuestionCacheStatus.FAILED,
-      lastError: message
-    },
-    update: {
-      status: AgentQuestionCacheStatus.FAILED,
-      lastError: message
+    });
+  } catch (upsertError) {
+    if (isCacheTableMissingError(upsertError)) {
+      cacheLog('cache_table_missing_write_failed_skip', { userId });
+      return;
     }
-  });
+    throw upsertError;
+  }
 }
 
 async function generateAndPersistCache(userId: string, question: CacheQuestion): Promise<CachedAgentResponse> {
@@ -368,41 +393,48 @@ async function generateAndPersistCache(userId: string, question: CacheQuestion):
     }
   }
 
-  await prisma.agentQuestionCache.upsert({
-    where: {
-      userId_questionKey: {
+  try {
+    await prisma.agentQuestionCache.upsert({
+      where: {
+        userId_questionKey: {
+          userId,
+          questionKey: buildPinyinQuestionKey(question)
+        }
+      },
+      create: {
         userId,
-        questionKey: buildPinyinQuestionKey(question)
+        questionKey: buildPinyinQuestionKey(question),
+        initialsText: question.initialsText,
+        answer: question.answer,
+        category: question.category,
+        answerText,
+        normalizedGuess: evaluation.normalizedGuess,
+        audioDataUrl,
+        sourceAudioUrl,
+        ttsDurationMs: ttsResult.durationMs || null,
+        ttsFormat: ttsResult.format ?? null,
+        status: AgentQuestionCacheStatus.READY,
+        lastError: null,
+        generatedAt: new Date()
+      },
+      update: {
+        answerText,
+        normalizedGuess: evaluation.normalizedGuess,
+        audioDataUrl,
+        sourceAudioUrl,
+        ttsDurationMs: ttsResult.durationMs || null,
+        ttsFormat: ttsResult.format ?? null,
+        status: AgentQuestionCacheStatus.READY,
+        lastError: null,
+        generatedAt: new Date()
       }
-    },
-    create: {
-      userId,
-      questionKey: buildPinyinQuestionKey(question),
-      initialsText: question.initialsText,
-      answer: question.answer,
-      category: question.category,
-      answerText,
-      normalizedGuess: evaluation.normalizedGuess,
-      audioDataUrl,
-      sourceAudioUrl,
-      ttsDurationMs: ttsResult.durationMs || null,
-      ttsFormat: ttsResult.format ?? null,
-      status: AgentQuestionCacheStatus.READY,
-      lastError: null,
-      generatedAt: new Date()
-    },
-    update: {
-      answerText,
-      normalizedGuess: evaluation.normalizedGuess,
-      audioDataUrl,
-      sourceAudioUrl,
-      ttsDurationMs: ttsResult.durationMs || null,
-      ttsFormat: ttsResult.format ?? null,
-      status: AgentQuestionCacheStatus.READY,
-      lastError: null,
-      generatedAt: new Date()
+    });
+  } catch (upsertError) {
+    if (!isCacheTableMissingError(upsertError)) {
+      throw upsertError;
     }
-  });
+    cacheLog('cache_table_missing_generate_write_skip', { userId });
+  }
 
   return {
     answerText,
@@ -582,16 +614,24 @@ export async function prewarmQuestionCache(input?: PrewarmOptions): Promise<Prew
   }
 
   const userIds = users.map((user) => user.id);
-  const readyCaches = await prisma.agentQuestionCache.findMany({
-    where: {
-      userId: { in: userIds },
-      status: AgentQuestionCacheStatus.READY
-    },
-    select: {
-      userId: true,
-      questionKey: true
+  let readyCaches: Array<{ userId: string; questionKey: string }> = [];
+  try {
+    readyCaches = await prisma.agentQuestionCache.findMany({
+      where: {
+        userId: { in: userIds },
+        status: AgentQuestionCacheStatus.READY
+      },
+      select: {
+        userId: true,
+        questionKey: true
+      }
+    });
+  } catch (error) {
+    if (!isCacheTableMissingError(error)) {
+      throw error;
     }
-  });
+    cacheLog('cache_table_missing_prewarm_scan_fallback');
+  }
 
   const readySet = new Set(readyCaches.map((item) => `${item.userId}|${item.questionKey}`));
 
@@ -733,21 +773,33 @@ export async function getAgentCacheProgressStats(): Promise<{
     accessToken: { not: null as string | null }
   };
 
-  const [eligibleAgentCount, readyPairCount, failedPairCount] = await Promise.all([
-    prisma.user.count({ where: eligibleFilter }),
-    prisma.agentQuestionCache.count({
-      where: {
-        status: AgentQuestionCacheStatus.READY,
-        user: eligibleFilter
-      }
-    }),
-    prisma.agentQuestionCache.count({
-      where: {
-        status: AgentQuestionCacheStatus.FAILED,
-        user: eligibleFilter
-      }
-    })
-  ]);
+  const eligibleAgentCount = await prisma.user.count({ where: eligibleFilter });
+
+  let readyPairCount = 0;
+  let failedPairCount = 0;
+  try {
+    [readyPairCount, failedPairCount] = await Promise.all([
+      prisma.agentQuestionCache.count({
+        where: {
+          status: AgentQuestionCacheStatus.READY,
+          user: eligibleFilter
+        }
+      }),
+      prisma.agentQuestionCache.count({
+        where: {
+          status: AgentQuestionCacheStatus.FAILED,
+          user: eligibleFilter
+        }
+      })
+    ]);
+  } catch (error) {
+    if (!isCacheTableMissingError(error)) {
+      throw error;
+    }
+    cacheLog('cache_table_missing_stats_fallback');
+    readyPairCount = 0;
+    failedPairCount = 0;
+  }
 
   const totalExpectedPairs = eligibleAgentCount * questionCount;
   const pendingPairCount = Math.max(totalExpectedPairs - readyPairCount, 0);
