@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { prisma } from '@/lib/db';
+import { triggerGlobalPrewarm, triggerUserPrewarm } from '@/lib/agent/question-cache';
 
 export async function GET(): Promise<Response> {
   const session = await getSession();
@@ -23,6 +24,9 @@ export async function GET(): Promise<Response> {
   if (!user) {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
+
+  triggerGlobalPrewarm('auth_session_access');
+  triggerUserPrewarm(user.id, 'auth_session_access_user');
 
   return NextResponse.json({
     authenticated: true,

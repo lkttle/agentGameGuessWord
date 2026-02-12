@@ -10,8 +10,9 @@ import type { PinyinQuestion } from '@/lib/game/pinyin-question-types';
 import { evaluateAgentGuess, extractGuessWord } from '@/lib/game/guess-word-engine';
 
 const MAX_PROXY_AUDIO_BYTES = 8 * 1024 * 1024;
-const DEFAULT_PREWARM_BATCH_SIZE = 12;
-const DEFAULT_PREWARM_BUDGET_MS = 12_000;
+const DEFAULT_PREWARM_CONCURRENCY = 4;
+const DEFAULT_PREWARM_RETRIES = 2;
+const DEFAULT_PREWARM_BACKOFF_MS = 250;
 
 interface CacheQuestion {
   initialsText: string;
@@ -36,6 +37,15 @@ interface PrewarmStats {
   elapsedMs: number;
 }
 
+interface PrewarmOptions {
+  targetUserId?: string;
+  maxPairs?: number;
+  timeBudgetMs?: number;
+  reason?: string;
+  concurrency?: number;
+  maxRetries?: number;
+}
+
 function cacheDebugEnabled(): boolean {
   return process.env.SECONDME_AGENT_CACHE_DEBUG === '1';
 }
@@ -53,10 +63,18 @@ function ttsProxyAudioEnabled(): boolean {
   return process.env.SECONDME_TTS_PROXY_AUDIO !== '0';
 }
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  const parsed = Number(raw ?? '');
+function parsePositiveInt(raw: unknown, fallback: number): number {
+  const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     return fallback;
+  }
+  return parsed;
+}
+
+function parsePositiveOrUndefined(raw: unknown): number | undefined {
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return undefined;
   }
   return parsed;
 }
@@ -72,6 +90,10 @@ function inferAudioMimeType(contentType: string | null, format?: string): string
   if (format?.toLowerCase() === 'wav') return 'audio/wav';
   if (format?.toLowerCase() === 'ogg') return 'audio/ogg';
   return 'audio/mpeg';
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function fetchAudioAsDataUrl(
@@ -340,7 +362,7 @@ async function waitForCacheFromOtherWorker(
   question: CacheQuestion
 ): Promise<CachedAgentResponse | null> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await sleep(200);
     const cache = await readReadyCache(userId, question);
     if (cache) {
       return cache;
@@ -458,15 +480,36 @@ async function findEligibleUsers(userId?: string): Promise<Array<{ id: string; c
   });
 }
 
-export async function prewarmQuestionCache(input?: {
-  targetUserId?: string;
-  maxPairs?: number;
-  timeBudgetMs?: number;
-  reason?: string;
-}): Promise<PrewarmStats> {
+function getConfiguredConcurrency(input?: number): number {
+  return parsePositiveInt(
+    input ?? process.env.SECONDME_PREWARM_CONCURRENCY,
+    DEFAULT_PREWARM_CONCURRENCY
+  );
+}
+
+function getConfiguredRetries(input?: number): number {
+  return parsePositiveInt(
+    input ?? process.env.SECONDME_PREWARM_RETRIES,
+    DEFAULT_PREWARM_RETRIES
+  );
+}
+
+function getConfiguredMaxPairs(input?: number): number | undefined {
+  const envValue = process.env.SECONDME_PREWARM_BATCH_SIZE;
+  return parsePositiveOrUndefined(input ?? envValue);
+}
+
+function getConfiguredTimeBudgetMs(input?: number): number | undefined {
+  const envValue = process.env.SECONDME_PREWARM_BUDGET_MS;
+  return parsePositiveOrUndefined(input ?? envValue);
+}
+
+export async function prewarmQuestionCache(input?: PrewarmOptions): Promise<PrewarmStats> {
   const startedAt = Date.now();
-  const maxPairs = parsePositiveInt(String(input?.maxPairs ?? ''), parsePositiveInt(process.env.SECONDME_PREWARM_BATCH_SIZE, DEFAULT_PREWARM_BATCH_SIZE));
-  const timeBudgetMs = parsePositiveInt(String(input?.timeBudgetMs ?? ''), parsePositiveInt(process.env.SECONDME_PREWARM_BUDGET_MS, DEFAULT_PREWARM_BUDGET_MS));
+  const maxPairs = getConfiguredMaxPairs(input?.maxPairs);
+  const timeBudgetMs = getConfiguredTimeBudgetMs(input?.timeBudgetMs);
+  const maxRetries = getConfiguredRetries(input?.maxRetries);
+  const concurrency = getConfiguredConcurrency(input?.concurrency);
 
   const allQuestions = getAllPinyinQuestions();
   const users = prioritizeUsers(await findEligibleUsers(input?.targetUserId));
@@ -510,11 +553,11 @@ export async function prewarmQuestionCache(input?: {
         continue;
       }
       pairs.push({ userId: user.id, question: ensureQuestion(question) });
-      if (pairs.length >= maxPairs) {
+      if (maxPairs && pairs.length >= maxPairs) {
         break;
       }
     }
-    if (pairs.length >= maxPairs) {
+    if (maxPairs && pairs.length >= maxPairs) {
       break;
     }
   }
@@ -522,34 +565,76 @@ export async function prewarmQuestionCache(input?: {
   let generated = 0;
   let hits = 0;
   let failed = 0;
+  let cursor = 0;
+  let shouldStop = false;
 
-  for (const pair of pairs) {
-    if (Date.now() - startedAt > timeBudgetMs) {
-      break;
+  async function processPairWithRetry(pair: { userId: string; question: CacheQuestion }): Promise<void> {
+    const questionKey = buildPinyinQuestionKey(pair.question);
+    const cached = await readReadyCache(pair.userId, pair.question);
+    if (cached) {
+      hits += 1;
+      return;
     }
 
-    try {
-      const cacheBefore = await readReadyCache(pair.userId, pair.question);
-      if (cacheBefore) {
-        hits += 1;
-        continue;
-      }
+    let attempt = 0;
+    while (attempt <= maxRetries) {
+      try {
+        const result = await getOrCreateCachedAgentResponseByUser({
+          userId: pair.userId,
+          question: pair.question
+        });
 
-      await getOrCreateCachedAgentResponseByUser({
-        userId: pair.userId,
-        question: pair.question
-      });
-      generated += 1;
-    } catch (error) {
-      failed += 1;
-      cacheLog('prewarm_pair_failed', {
-        reason: input?.reason ?? 'manual',
-        userId: pair.userId,
-        questionKey: buildPinyinQuestionKey(pair.question),
-        error: error instanceof Error ? error.message : String(error)
-      });
+        if (!result?.answerText?.trim()) {
+          throw new Error('empty_cache_result');
+        }
+
+        generated += 1;
+        return;
+      } catch (error) {
+        if (attempt >= maxRetries) {
+          failed += 1;
+          cacheLog('prewarm_pair_failed', {
+            reason: input?.reason ?? 'manual',
+            userId: pair.userId,
+            questionKey,
+            attempt,
+            maxRetries,
+            error: error instanceof Error ? error.message : String(error)
+          });
+          return;
+        }
+
+        await sleep(DEFAULT_PREWARM_BACKOFF_MS * (attempt + 1));
+      }
+      attempt += 1;
     }
   }
+
+  async function worker(workerId: number): Promise<void> {
+    while (!shouldStop) {
+      if (timeBudgetMs && Date.now() - startedAt > timeBudgetMs) {
+        shouldStop = true;
+        return;
+      }
+
+      const index = cursor;
+      cursor += 1;
+      if (index >= pairs.length) {
+        return;
+      }
+
+      const pair = pairs[index];
+      await processPairWithRetry(pair);
+    }
+
+    cacheLog('prewarm_worker_stop', {
+      workerId,
+      reason: 'budget_exceeded_or_stopped'
+    });
+  }
+
+  const workerCount = Math.max(1, Math.min(concurrency, pairs.length || 1));
+  await Promise.all(Array.from({ length: workerCount }, (_, index) => worker(index + 1)));
 
   const stats: PrewarmStats = {
     scannedPairs: pairs.length,
@@ -561,7 +646,11 @@ export async function prewarmQuestionCache(input?: {
 
   cacheLog('prewarm_batch_done', {
     ...stats,
-    reason: input?.reason ?? 'manual'
+    reason: input?.reason ?? 'manual',
+    concurrency,
+    maxRetries,
+    maxPairs: maxPairs ?? 'all',
+    timeBudgetMs: timeBudgetMs ?? 'unlimited'
   });
 
   return stats;
@@ -602,9 +691,7 @@ export function triggerUserPrewarm(userId: string, reason: string): boolean {
 
   const task = prewarmQuestionCache({
     targetUserId: userId,
-    reason,
-    maxPairs: getAllPinyinQuestions().length,
-    timeBudgetMs: Math.max(60_000, parsePositiveInt(process.env.SECONDME_PREWARM_BUDGET_MS, DEFAULT_PREWARM_BUDGET_MS))
+    reason
   }).finally(() => {
     locks.userPrewarmMap.delete(userId);
   });
