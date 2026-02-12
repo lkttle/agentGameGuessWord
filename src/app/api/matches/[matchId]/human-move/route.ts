@@ -1,33 +1,54 @@
 import { MatchStatus, ParticipantType } from '@prisma/client';
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/current-user';
+import { prisma } from '@/lib/db';
+import { evaluateRound, timeoutRoundResult } from '@/lib/game/guess-word-engine';
 import {
-  evaluateRound,
-  evaluateAgentGuess,
-  extractGuessWord,
-  timeoutRoundResult
-} from '@/lib/game/guess-word-engine';
-import {
-  FallbackAgentTurnClient,
-  runAgentTurnWithRetry
-} from '@/lib/agent/orchestrator';
-import { SecondMeAgentTurnClient } from '@/lib/agent/secondme-agent-client';
+  buildPinyinQuestionKey,
+  parsePinyinQuestionKey
+} from '@/lib/game/pinyin-question-bank';
 
 interface HumanMoveBody {
   participantId?: string;
-  agentParticipantId?: string;
-  autoAgentResponse?: boolean;
   targetWord?: string;
   guessWord?: string;
   roundIndex?: number;
   pinyinHint?: string;
   categoryHint?: string;
   questionKey?: string;
+  timedOut?: boolean;
 }
 
 function isValidGuess(input: string): boolean {
   return /^[\u4e00-\u9fff]{2,4}$/.test(input);
+}
+
+function parseRoundIndex(value: unknown, fallback: number): number {
+  if (value === undefined || value === null) return fallback;
+  const num = Number(value);
+  if (!Number.isInteger(num) || num < 1) {
+    throw new Error('roundIndex must be a positive integer');
+  }
+  return num;
+}
+
+function hasQuestionContextMismatch(
+  body: HumanMoveBody,
+  parsedQuestion: { initialsText: string; answer: string; category: string }
+): boolean {
+  if (body.targetWord?.trim() && body.targetWord.trim() !== parsedQuestion.answer) {
+    return true;
+  }
+
+  if (body.pinyinHint?.trim() && body.pinyinHint.trim().toUpperCase() !== parsedQuestion.initialsText) {
+    return true;
+  }
+
+  if (body.categoryHint?.trim() && body.categoryHint.trim() !== parsedQuestion.category) {
+    return true;
+  }
+
+  return false;
 }
 
 export async function POST(
@@ -59,23 +80,41 @@ export async function POST(
   }
 
   const body = (await request.json()) as HumanMoveBody;
-  const expectedQuestionKey = body.questionKey?.trim();
-  const guessWord = body.guessWord?.trim();
-  const targetWord = body.targetWord?.trim();
+  const participantId = body.participantId?.trim();
+  if (!participantId) {
+    return NextResponse.json({ error: 'participantId is required' }, { status: 400 });
+  }
 
-  if (!guessWord || !targetWord) {
-    return NextResponse.json({ error: 'guessWord and targetWord are required' }, { status: 400 });
+  const rawQuestionKey = body.questionKey?.trim();
+  if (!rawQuestionKey) {
+    return NextResponse.json({ error: 'questionKey is required' }, { status: 400 });
   }
-  if (!isValidGuess(targetWord)) {
-    return NextResponse.json({ error: 'targetWord must be a 2-4 Chinese word' }, { status: 400 });
+
+  let roundIndex: number;
+  try {
+    roundIndex = parseRoundIndex(body.roundIndex, match.totalRounds + 1);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid roundIndex' },
+      { status: 400 }
+    );
   }
-  if (!isValidGuess(guessWord)) {
-    return NextResponse.json({ error: 'guessWord must be a 2-4 Chinese word' }, { status: 400 });
+
+  if (roundIndex < match.totalRounds) {
+    return NextResponse.json({
+      roundIndex,
+      skipped: true,
+      reason: 'stale_round_index'
+    });
+  }
+
+  if (roundIndex > match.totalRounds + 1) {
+    return NextResponse.json({ error: 'roundIndex is too far ahead of current match state' }, { status: 409 });
   }
 
   const humanParticipant = match.room.participants.find(
     (participant) =>
-      participant.id === body.participantId &&
+      participant.id === participantId &&
       participant.userId === user.id &&
       participant.participantType === ParticipantType.HUMAN
   );
@@ -84,20 +123,19 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid human participant or out-of-turn action' }, { status: 403 });
   }
 
-  const roundIndex = body.roundIndex ?? match.totalRounds + 1;
-  const serverQuestionKey = [
-    body.pinyinHint?.trim() ?? '',
-    targetWord.toLowerCase(),
-    body.categoryHint?.trim() ?? ''
-  ].join('|');
+  const parsedQuestion = parsePinyinQuestionKey(rawQuestionKey);
+  if (!parsedQuestion) {
+    return NextResponse.json({ error: 'questionKey is invalid' }, { status: 400 });
+  }
 
-  if (expectedQuestionKey && expectedQuestionKey !== serverQuestionKey) {
+  const normalizedQuestionKey = buildPinyinQuestionKey(parsedQuestion);
+  if (hasQuestionContextMismatch(body, parsedQuestion)) {
     return NextResponse.json({
       roundIndex,
       human: {
         participantId: humanParticipant.id,
-        guessWord,
-        result: timeoutRoundResult(targetWord)
+        guessWord: '',
+        result: timeoutRoundResult(parsedQuestion.answer)
       },
       agents: [],
       skipped: true,
@@ -105,79 +143,21 @@ export async function POST(
     });
   }
 
-  const humanResult = evaluateRound({ targetWord, guessWord, attemptIndex: 1 });
-  const expectedLength = body.pinyinHint?.length ?? targetWord.length;
+  const timedOut = body.timedOut === true;
+  const guessWord = body.guessWord?.trim() ?? '';
 
-  const agentTurns: Array<{
-    participantId: string;
-    guessWord: string;
-    usedFallback: boolean;
-    result: ReturnType<typeof evaluateRound>;
-  }> = [];
-
-  if (!humanResult.isCorrect && (body.agentParticipantId || body.autoAgentResponse !== false)) {
-    const agentParticipants = match.room.participants
-      .filter((participant) => participant.participantType === ParticipantType.AGENT)
-      .sort((left, right) => left.seatOrder - right.seatOrder);
-
-    const selectedAgent = body.agentParticipantId
-      ? agentParticipants.filter((participant) => participant.id === body.agentParticipantId)
-      : agentParticipants;
-
-    // Try SecondMe agent client first, fall back to dummy client
-    let client;
-    try {
-      client = new SecondMeAgentTurnClient();
-    } catch {
-      client = new FallbackAgentTurnClient();
+  if (!timedOut) {
+    if (!guessWord) {
+      return NextResponse.json({ error: 'guessWord is required' }, { status: 400 });
     }
-    const previousGuesses = [guessWord];
-    const rawTurns = [];
-
-    for (const participant of selectedAgent) {
-      const turn = await runAgentTurnWithRetry(
-        participant.id,
-        {
-          roundIndex,
-          hint: `${targetWord[0]}${'_'.repeat(Math.max(targetWord.length - 1, 0))}`,
-          pinyinHint: body.pinyinHint ?? undefined,
-          categoryHint: body.categoryHint?.trim() || undefined,
-          questionKey: body.questionKey?.trim() || undefined,
-          previousGuesses: [...previousGuesses]
-        },
-        client,
-        { timeoutMs: 15000, maxRetries: 1 }
-      );
-
-      rawTurns.push({ participantId: participant.id, ...turn });
-    }
-
-    for (let index = 0; index < rawTurns.length; index += 1) {
-      const turn = rawTurns[index];
-      const rawResponse = turn.guessWord?.trim() ?? '';
-      const extractedWord = extractGuessWord(rawResponse, expectedLength);
-      const result = turn.usedFallback
-        ? timeoutRoundResult(targetWord)
-        : evaluateAgentGuess({
-            targetWord,
-            rawResponse,
-            extractedWord,
-            attemptIndex: index + 2
-          });
-
-      agentTurns.push({
-        participantId: turn.participantId ?? '',
-        guessWord: rawResponse,
-        usedFallback: turn.usedFallback,
-        result
-      });
-
-      previousGuesses.push(extractedWord || rawResponse);
-      if (result.isCorrect) {
-        break;
-      }
+    if (!isValidGuess(guessWord)) {
+      return NextResponse.json({ error: 'guessWord must be a 2-4 Chinese word' }, { status: 400 });
     }
   }
+
+  const humanResult = timedOut
+    ? timeoutRoundResult(parsedQuestion.answer)
+    : evaluateRound({ targetWord: parsedQuestion.answer, guessWord, attemptIndex: 1 });
 
   await prisma.$transaction(async (tx) => {
     await tx.roundLog.create({
@@ -186,27 +166,12 @@ export async function POST(
         roundIndex,
         actorType: ParticipantType.HUMAN,
         actorId: humanParticipant.id,
-        guessWord,
+        guessWord: timedOut ? null : guessWord,
         isCorrect: humanResult.isCorrect,
         scoreDelta: humanResult.scoreDelta,
-        timedOut: false
+        timedOut: humanResult.timedOut
       }
     });
-
-    if (agentTurns.length > 0) {
-      await tx.roundLog.createMany({
-        data: agentTurns.map((agentTurn) => ({
-          matchId,
-          roundIndex,
-          actorType: ParticipantType.AGENT,
-          actorId: agentTurn.participantId,
-          guessWord: agentTurn.guessWord,
-          isCorrect: agentTurn.result.isCorrect,
-          scoreDelta: agentTurn.result.scoreDelta,
-          timedOut: false
-        }))
-      });
-    }
 
     await tx.match.update({
       where: { id: matchId },
@@ -216,11 +181,12 @@ export async function POST(
 
   return NextResponse.json({
     roundIndex,
+    questionKey: normalizedQuestionKey,
     human: {
       participantId: humanParticipant.id,
-      guessWord,
+      guessWord: timedOut ? '' : guessWord,
       result: humanResult
     },
-    agents: agentTurns
+    agents: []
   });
 }

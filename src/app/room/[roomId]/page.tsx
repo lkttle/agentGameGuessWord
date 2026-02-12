@@ -30,16 +30,18 @@ interface RoundLogEntry {
   id: string;
   roundIndex: number;
   actorId: string;
-  guessWord: string;
+  guessWord: string | null;
   isCorrect: boolean;
   scoreDelta: number;
+  timedOut: boolean;
 }
 
 interface HumanMoveResponse {
   roundIndex: number;
   skipped?: boolean;
   reason?: string;
-  human: {
+  questionKey?: string;
+  human?: {
     participantId: string;
     guessWord: string;
     result: {
@@ -50,7 +52,7 @@ interface HumanMoveResponse {
       timedOut: boolean;
     };
   };
-  agents: Array<{
+  agents?: Array<{
     participantId: string;
     guessWord: string;
     usedFallback: boolean;
@@ -569,7 +571,7 @@ function PlayerCard({ participant, score, rank, latestAnswer, onTtsPlay }: {
   participant: Participant;
   score: number;
   rank: number;
-  latestAnswer?: { guessWord: string; isCorrect: boolean; roundIndex: number } | null;
+  latestAnswer?: { guessWord: string; isCorrect: boolean; roundIndex: number; timedOut: boolean } | null;
   onTtsPlay?: () => void;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
@@ -619,7 +621,7 @@ function PlayerCard({ participant, score, rank, latestAnswer, onTtsPlay }: {
           <div className={`player-card__answer ${latestAnswer.isCorrect ? 'player-card__answer--correct' : 'player-card__answer--wrong'}`}>
             <span className="player-card__answer-word">{latestAnswer.guessWord}</span>
             <span className="player-card__answer-result">
-              {latestAnswer.isCorrect ? '+1' : '未中'}
+              {latestAnswer.timedOut ? '超时' : latestAnswer.isCorrect ? '+1' : '未中'}
             </span>
             {isAgent && onTtsPlay && (
               <span className="player-card__answer-tts" title="语音播放" onClick={onTtsPlay}>
@@ -648,6 +650,7 @@ export default function RoomPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [guessWord, setGuessWord] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState<PinyinQuestion | null>(null);
+  const [revealedRoundAnswer, setRevealedRoundAnswer] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [timerStarted, setTimerStarted] = useState(false);
   const [turnTimeLeft, setTurnTimeLeft] = useState<number | null>(null);
@@ -877,6 +880,7 @@ export default function RoomPage() {
   const rankedParticipants = [...participants].sort(
     (a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0)
   );
+  const rankByParticipantId = new Map(rankedParticipants.map((participant, index) => [participant.id, index + 1]));
 
   const stopRoomRuntime = useCallback(() => {
     if (pollingRef.current) clearInterval(pollingRef.current);
@@ -912,6 +916,7 @@ export default function RoomPage() {
     revealProcessingRef.current = false;
     clearAgentRevealTimers();
     stopAllTTSPlayback();
+    setRevealedRoundAnswer(null);
     answeredParticipantsRef.current.clear();
     currentRoundLogIdsRef.current.clear();
 
@@ -992,14 +997,25 @@ export default function RoomPage() {
     const hasCompletedOneRound = answeredParticipantsRef.current.size >= Math.max(1, orderedParticipants.length);
 
     if (hasCompletedOneRound) {
+      const answeredQuestion = currentQuestion?.answer?.trim();
+      if (answeredQuestion) {
+        setRevealedRoundAnswer(answeredQuestion);
+      }
+
       nextQuestionStarterIdRef.current = nextParticipantId;
+      await sleep(900);
+
+      if (questionKey && currentQuestionKeyRef.current !== questionKey) {
+        return;
+      }
+
       await fetchQuestion('next');
       return;
     }
 
     currentTurnParticipantIdRef.current = nextParticipantId;
     setCurrentTurnParticipantId(nextParticipantId);
-  }, [fetchQuestion, getNextParticipantId, orderedParticipants.length]);
+  }, [currentQuestion?.answer, fetchQuestion, getNextParticipantId, orderedParticipants.length]);
 
   useEffect(() => {
     currentQuestionKeyRef.current = questionToKey(currentQuestion);
@@ -1122,7 +1138,7 @@ export default function RoomPage() {
     }
 
     if (questionKey) {
-      void finalizeTurnAndMaybeSwitchQuestion(currentTurnParticipant.id, false, questionKey);
+      void handleHumanTimeout(currentTurnParticipant.id, questionKey);
     }
   }, [
     turnTimeLeft,
@@ -1131,6 +1147,9 @@ export default function RoomPage() {
     currentTurnParticipant,
     isSubmitting,
     busy,
+    match,
+    roomId,
+    appendCurrentRoundLogIds,
     finalizeTurnAndMaybeSwitchQuestion
   ]);
 
@@ -1256,6 +1275,7 @@ export default function RoomPage() {
     currentTurnParticipantIdRef.current = starterId;
     setCurrentTurnParticipantId(starterId);
     setCurrentQuestion(null);
+    setRevealedRoundAnswer(null);
 
     const nextRoundIndex = (match?.totalRounds ?? 0) + 1;
     activeRoundIndexRef.current = nextRoundIndex;
@@ -1404,7 +1424,6 @@ export default function RoomPage() {
         method: 'POST',
         body: JSON.stringify({
           participantId: humanParticipant.id,
-          autoAgentResponse: false,
           targetWord: currentQuestion.answer,
           pinyinHint: currentQuestion.initialsText,
           categoryHint: currentQuestion.category,
@@ -1442,12 +1461,55 @@ export default function RoomPage() {
       const newLogs = freshState.room.match?.roundLogs ?? [];
       const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
       appendCurrentRoundLogIds(latestLogs);
+      const currentTurnResult = humanMoveResult.human?.result;
+      if (!currentTurnResult) {
+        return;
+      }
       await finalizeTurnAndMaybeSwitchQuestion(
         humanParticipant.id,
-        humanMoveResult.human.result.isCorrect,
+        currentTurnResult.isCorrect,
         questionKey
       );
     }
+  }
+
+  async function handleHumanTimeout(participantId: string, questionKey: string) {
+    if (!currentQuestion || !match || !pageActiveRef.current || switchingQuestionRef.current || runningActionRef.current) {
+      return;
+    }
+
+    const prevLogCount = match.roundLogs?.length ?? 0;
+    const roundIndex = activeRoundIndexRef.current;
+
+    const completed = await runAction('玩家超时，自动跳过中...', async () => {
+      await api<HumanMoveResponse>(`/api/matches/${match.id}/human-move`, {
+        method: 'POST',
+        body: JSON.stringify({
+          participantId,
+          questionKey,
+          targetWord: currentQuestion.answer,
+          pinyinHint: currentQuestion.initialsText,
+          categoryHint: currentQuestion.category,
+          roundIndex,
+          timedOut: true
+        })
+      });
+    });
+
+    if (!completed || !pageActiveRef.current) return;
+
+    const freshState = await api<RoomState>(`/api/rooms/${roomId}/state`).catch(() => null);
+    if (!freshState || !pageActiveRef.current) return;
+
+    setRoomState(freshState);
+    if (currentQuestionKeyRef.current !== questionKey) {
+      return;
+    }
+
+    const newLogs = freshState.room.match?.roundLogs ?? [];
+    const latestLogs = newLogs.slice(0, newLogs.length - prevLogCount);
+    appendCurrentRoundLogIds(latestLogs);
+    await finalizeTurnAndMaybeSwitchQuestion(participantId, false, questionKey);
   }
 
   async function handleFinish() {
@@ -1481,10 +1543,13 @@ export default function RoomPage() {
   const revealedAgentLogSet = new Set(revealedAgentLogIds);
 
   // Compute latest answer per participant for player cards
-  const latestAnswers = new Map<string, { guessWord: string; isCorrect: boolean; roundIndex: number }>();
+  const latestAnswers = new Map<string, { guessWord: string; isCorrect: boolean; roundIndex: number; timedOut: boolean }>();
   if (match?.roundLogs) {
     for (const log of match.roundLogs) {
       if (log.roundIndex !== activeRoundIndexRef.current) {
+        continue;
+      }
+      if (latestAnswers.has(log.actorId)) {
         continue;
       }
       if (!currentRoundLogIdsRef.current.has(log.id)) {
@@ -1493,11 +1558,15 @@ export default function RoomPage() {
       const player = participants.find(p => p.id === log.actorId);
       const isAgent = player?.participantType === PARTICIPANT_TYPES.AGENT;
       if (isAgent && !revealedAgentLogSet.has(log.id)) continue;
-      const renderedGuessWord = isAgent ? (agentRevealTextMap[log.id] ?? log.guessWord) : log.guessWord;
+      const rawGuessWord = log.guessWord?.trim() ?? '';
+      const renderedGuessWord = log.timedOut
+        ? '（未作答）'
+        : (isAgent ? (agentRevealTextMap[log.id] ?? rawGuessWord) : rawGuessWord);
       latestAnswers.set(log.actorId, {
         guessWord: renderedGuessWord,
         isCorrect: log.isCorrect,
         roundIndex: log.roundIndex,
+        timedOut: log.timedOut,
       });
     }
   }
@@ -1535,16 +1604,16 @@ export default function RoomPage() {
 
         {/* Player Cards Grid */}
         <div className="player-cards-grid">
-          {rankedParticipants.map((p, idx) => (
+          {orderedParticipants.map((p) => (
             <PlayerCard
               key={p.id}
               participant={p}
               score={scores.get(p.id) ?? 0}
-              rank={idx + 1}
+              rank={rankByParticipantId.get(p.id) ?? participants.length}
               latestAnswer={latestAnswers.get(p.id) ?? null}
               onTtsPlay={p.participantType === PARTICIPANT_TYPES.AGENT ? () => {
                 const answer = latestAnswers.get(p.id);
-                if (answer?.guessWord) {
+                if (answer?.guessWord && !answer.timedOut) {
                   void unlockAudioPlayback('manual_tts_click');
                   void playTTSWithRetry(answer.guessWord, {
                     userId: p.ownerUserId ?? p.userId,
@@ -1555,6 +1624,12 @@ export default function RoomPage() {
             />
           ))}
         </div>
+
+        {room?.status === 'RUNNING' && revealedRoundAnswer && (
+          <div className="chatroom__system-msg">
+            本轮无人答对，答案是：{revealedRoundAnswer}
+          </div>
+        )}
 
         {/* Hint Display */}
         {room?.status === 'RUNNING' && currentQuestion && (
