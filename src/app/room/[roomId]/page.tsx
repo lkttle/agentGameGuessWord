@@ -861,6 +861,7 @@ export default function RoomPage() {
     }
     return base;
   }, [participants, room?.mode]);
+  const firstOrderedParticipantId = orderedParticipants[0]?.id ?? null;
 
   const getNextParticipantId = useCallback((participantId: string | null): string | null => {
     if (!participantId || orderedParticipants.length < 1) {
@@ -1270,7 +1271,7 @@ export default function RoomPage() {
     clearAgentRevealTimers();
     stopAllTTSPlayback();
 
-    const starterId = orderedParticipants[0]?.id ?? null;
+    const starterId = firstOrderedParticipantId;
     nextQuestionStarterIdRef.current = starterId;
     currentTurnParticipantIdRef.current = starterId;
     setCurrentTurnParticipantId(starterId);
@@ -1280,7 +1281,7 @@ export default function RoomPage() {
     const nextRoundIndex = (match?.totalRounds ?? 0) + 1;
     activeRoundIndexRef.current = nextRoundIndex;
     setActiveRoundIndex(nextRoundIndex);
-  }, [match?.id, match?.totalRounds, orderedParticipants, clearAgentRevealTimers]);
+  }, [match?.id, firstOrderedParticipantId, clearAgentRevealTimers]);
 
   useEffect(() => {
     if (room?.status === 'FINISHED') {
